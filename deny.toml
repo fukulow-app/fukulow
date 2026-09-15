@@ -1,0 +1,6 @@
+[licenses]
+# MIT and Apache-2.0 cover the common licences in this dependency tree.
+# matchit's MIT AND BSD-3-Clause requires both identifiers.
+# unicode-ident's (MIT OR Apache-2.0) AND Unicode-3.0 requires Unicode-3.0 too.
+# A fifth identifier requires a deliberate review when the dependency tree changes.
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "Unicode-3.0"]

@@ -1,0 +1,35 @@
+name: audit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Check advisories
+        if: ${{ !cancelled() }}
+        run: cargo deny check advisories
+      # An advisory must not prevent an independent licence violation from surfacing.
+      - name: Check licences, bans, and sources
+        if: ${{ !cancelled() }}
+        run: cargo deny check licenses bans sources

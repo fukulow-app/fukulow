@@ -1,0 +1,59 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/app",
+    "crates/protocol",
+    "crates/domain",
+    "crates/db",
+    "crates/auth",
+    "crates/realtime",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/fukulow-app/fukulow"
+
+[workspace.dependencies]
+# Workspace members. Declaring the allowed direction here is what makes a wrong
+# one fail to build: reaching the other way produces a dependency cycle, and
+# cargo rejects it before review has to notice.
+protocol = { path = "crates/protocol" }
+domain = { path = "crates/domain" }
+db = { path = "crates/db" }
+auth = { path = "crates/auth" }
+realtime = { path = "crates/realtime" }
+
+# Registry crates. Versions live here and members inherit them, so a version is
+# never raised in one crate and left behind in another.
+tokio = { version = "1.53", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    # Shutdown is a signal handler, not a Ctrl-C helper: containers send SIGTERM,
+    # and a process that only listens for SIGINT is killed rather than stopped.
+    "signal",
+    "time",
+] }
+# `ws` is not enabled. Nothing serves a WebSocket until #6, and a feature turned
+# on before its first use cannot be told apart from one that is needed.
+axum = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+# The binary is allowed to lose the error type at the boundary; libraries are not.
+anyhow = "1.0"
+thiserror = "2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Both of these compile, pass review, and then deadlock at runtime. They are the
+# failures that produce no error message, so they are denied rather than warned.
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+too_many_lines = "warn"

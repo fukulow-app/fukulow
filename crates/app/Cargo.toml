@@ -1,0 +1,25 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+protocol = { workspace = true }
+domain = { workspace = true }
+db = { workspace = true }
+auth = { workspace = true }
+realtime = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+# Not inherited automatically: a member that omits this table is silently
+# unlinted while the workspace still looks configured.
+[lints]
+workspace = true
