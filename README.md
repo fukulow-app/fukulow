@@ -29,16 +29,28 @@ translation file and are not hard-coded.
 
 ## Running it
 
-Requires [Rust](https://rustup.rs/) (the pinned toolchain in
-`rust-toolchain.toml`) and Docker.
+Requires [Rust](https://rustup.rs/); the pinned toolchain in
+`rust-toolchain.toml` is installed for you on first build. Linux or macOS —
+shutdown is handled through Unix signals, and Windows is not a supported host.
 
 ```bash
 cp .env.example .env
-docker compose up -d
+cargo run -p app
 ```
 
-There is nothing to run past this point yet. When there is, this section will
-say so and the steps will be reproducible from a clean checkout.
+```bash
+curl -i localhost:8080/health
+```
+
+```
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"status":"ok"}
+```
+
+**No database is needed yet.** `compose.yaml` is here for the schema that comes
+next; starting it now would run PostgreSQL for nothing.
 
 ## Contributing
 

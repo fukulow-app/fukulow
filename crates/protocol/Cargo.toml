@@ -1,0 +1,16 @@
+[package]
+name = "protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+
+# Not inherited automatically: a member that omits this table is silently
+# unlinted while the workspace still looks configured.
+[lints]
+workspace = true
