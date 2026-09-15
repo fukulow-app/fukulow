@@ -1,0 +1,16 @@
+#!/bin/sh
+# Refuse commits on the default branch. Work happens on issue branches only.
+# Escape hatch for repository bootstrap: ALLOW_MAIN_COMMIT=1 git commit ...
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+if [ "$branch" = "main" ] && [ "$ALLOW_MAIN_COMMIT" != "1" ]; then
+	echo "pre-commit: refusing to commit on 'main'." >&2
+	echo "  git switch -c issue-<number>-<short-english-slug>" >&2
+	exit 1
+fi
+
+# Block secrets from ever entering history.
+if command -v gitleaks >/dev/null 2>&1; then
+	gitleaks protect --staged --redact --no-banner || exit 1
+else
+	echo "pre-commit: gitleaks not installed; secret scan skipped." >&2
+fi

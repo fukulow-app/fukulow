@@ -1,0 +1,28 @@
+# Local PostgreSQL for development and tests.
+#
+# This is never a deployment target. Development and tests must stay on this
+# server: the test harness creates and drops databases, and pointing it at a
+# managed service would put real data in its path.
+services:
+  postgres:
+    image: postgres:17
+    container_name: fukulow-postgres
+    environment:
+      POSTGRES_USER: fukulow
+      POSTGRES_PASSWORD: fukulow
+      POSTGRES_DB: fukulow_dev
+    ports:
+      # Bound to loopback on purpose. A bare "15432:5432" publishes on every
+      # interface and bypasses the host firewall.
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fukulow -d fukulow_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres-data:

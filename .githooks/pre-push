@@ -1,0 +1,10 @@
+#!/bin/sh
+# Refuse direct pushes to the default branch. Changes reach 'main' through a PR.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+	case "$remote_ref" in
+	refs/heads/main)
+		echo "pre-push: refusing to push directly to 'main'. Open a pull request." >&2
+		exit 1
+		;;
+	esac
+done

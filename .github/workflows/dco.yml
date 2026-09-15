@@ -1,0 +1,40 @@
+# Every commit must carry a Signed-off-by line (DCO). There is no CLA, so this
+# check is the whole of the agreement and it has to actually run.
+#
+# It verifies the commits a pull request adds, not the branch tip: a branch can
+# be signed off at the tip and carry unsigned commits underneath.
+name: dco
+
+on:
+  pull_request:
+
+jobs:
+  signed-off-by:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The merge-base is needed to list the commits this PR adds.
+          fetch-depth: 0
+
+      - name: Every commit in this pull request is signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for sha in $(git rev-list "$BASE..$HEAD"); do
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            if ! git show -s --format='%B' "$sha" \
+                 | grep -qiE "^Signed-off-by: .+ <.+@.+>$"; then
+              echo "::error::$sha by $author has no Signed-off-by line"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Sign commits off with: git commit -s"
+            echo "To fix a branch: git rebase --signoff $BASE"
+            exit 1
+          fi
+          echo "All commits are signed off."

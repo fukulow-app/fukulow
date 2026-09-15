@@ -1,0 +1,6 @@
+# Pinned so that CI and every developer machine agree on one compiler.
+# Build environments that cannot write to $HOME are unable to download a
+# toolchain, so changing this pin means installing the new one there first.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

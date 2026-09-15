@@ -1,0 +1,32 @@
+# === Secrets: never commit ===
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*.json
+service-account*.json
+gha-creds-*.json
+
+# === Rust ===
+/target/
+**/*.rs.bk
+# A workspace-local CARGO_HOME, for build environments that cannot write to $HOME.
+.cargo-home/
+
+# === Frontend (TypeScript / Vite) ===
+node_modules/
+dist/
+.vite/
+
+# === Claude Code ===
+.claude/worktrees/
+.claude/settings.local.json
+# CLAUDE.md is a symlink into a private notes repository.
+/CLAUDE.md
+
+# === OS / editors ===
+.DS_Store
+*.swp
+.idea/
+.vscode/
