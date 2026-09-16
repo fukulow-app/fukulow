@@ -38,19 +38,24 @@ the happy path says nothing about whether the guard exists.
 | **A channel member need not be a member of the channel's organization** | The absence of the constraint above on `channel_members` — deliberate, and tested in the allowed direction | #11 |
 | **An invite cannot point at anything outside its own organization** | One target column per kind, each with a composite foreign key through the invite's `organization_id`, and a `CHECK` that the right one is filled | #2 |
 | A channel is owned by exactly one of a team or its organization | `CHECK ((scope = 'organization' AND team_id IS NULL) OR (scope = 'team' AND team_id IS NOT NULL))`; `scope` has no default | #11 |
+| **Every column of a composite foreign key is `NOT NULL`**, except where NULL is the documented intent | A NULL in any column makes PostgreSQL skip the key, and a `CHECK` passes on NULL — so a nullable column silently turns the constraint off. **The only deliberate exceptions are `channels.team_id` (an organization-scoped channel) and `invites.target_team_id` (whose presence a `CHECK` on the non-null `kind` requires).** A schema test lists every composite foreign key column and fails on a nullable one outside those two | #2, #11 |
 | The composite foreign key from `channels` to `teams` is **not** checked when `team_id` is NULL | Default behaviour of a composite key; asserted by a test and stated in a schema comment, because it looks enforced | #11 |
 
 ## Identity
 
 | Invariant | Enforced by | Lands in |
 |---|---|---|
-| A user row is never deleted | The application role holds no `DELETE` on `users` | #2 |
+| **Every operation is performed by an actor**, and authorship, membership and audit reference `actors` — never `users` | Foreign keys to `actors (id)`. **A foreign key does not forbid NULL, so every one of these is also `NOT NULL`**: `messages.sender_actor_id`, `audit_events.actor_id`, `invites.created_by_actor_id`, and `sessions.actor_id` (to `users`). In `organization_members`, `team_members` and `channel_members`, `actor_id` is part of the primary key, which makes it `NOT NULL` | #2, #11 |
+| **Actors are global**: an actor belongs to no organization, and one actor may belong to several | `actors` has no `organization_id`; belonging is recorded only in membership tables | #2 |
+| An actor row is never deleted | The application role holds no `DELETE` on `actors`. History references it | #2 |
+| **Only a human actor has a `users` row** | `actors` has `UNIQUE (id, type)`; `users` carries **`actor_type NOT NULL`**, fixed by `CHECK (actor_type = 'human')`, and references `actors (id, type)` through `(actor_id, actor_type)`. **`NOT NULL` is what makes this hold:** measured on PostgreSQL 17, without it a bot's id with `actor_type = NULL` is accepted — the `CHECK` treats NULL as passing and the composite key skips a row with a NULL column. A test inserts exactly that and expects refusal | #2 |
+| Only a person can hold a login session | `sessions` references `users (actor_id)` — which, by the row above, only a human actor has | #2 |
 | An organization membership row is never deleted — only its `status` changes | The application role holds no `DELETE` on `organization_members` | #2 |
 | A team membership row **may** be deleted | Nothing references it, and its removal is recorded in `audit_events` | #2 |
-| An active user has an email address | `CHECK (deleted_at IS NOT NULL OR email IS NOT NULL)` | #2 |
-| Active users' email addresses are unique, ignoring case | `UNIQUE INDEX ON users (lower(email)) WHERE deleted_at IS NULL`. Lookups must use `lower(email) = lower($1)` or the index is silently skipped | #2 |
-| **Display names have exactly two sources of truth: `users.display_name` and `organization_members.display_name`.** No other column, and no structured metadata, persists a copy | **Columns:** a test reads `information_schema.columns` and fails on a name-like column anywhere else. **Structured metadata (`jsonb`):** the schema test cannot see inside it, so it is held by construction instead — metadata is built by typed functions whose parameters are ids and enumerations, never free text — and by review | #2 |
-| Leaving the service erases every personal-data column and keeps `users.id` | The personal-data columns are listed in one place in code; a test checks each column individually | #2 |
+| A person has an email address | `users.email NOT NULL`. No condition is needed: a person who leaves has no `users` row at all | #2 |
+| People's email addresses are unique, ignoring ASCII case, **identically on every server** | `UNIQUE INDEX ON users (lower(email COLLATE "C"))`. Without `COLLATE "C"`, `lower()` follows the database's locale — on a Turkish-locale server `I` lowers to dotless `ı`, and `I@example.com` and `i@example.com` would both be accepted. Lookups must use the same expression or the index is silently skipped. Provider-specific rules — Gmail dots, `+tags` — are deliberately not applied | #2 |
+| **Display names have exactly two sources of truth: `actors.display_name` and `organization_members.display_name`.** No other column, and no structured metadata, persists a copy | **Columns:** a test reads `information_schema.columns` and fails on a name-like column anywhere else. **Structured metadata (`jsonb`):** the schema test cannot see inside it, so it is held by construction instead — metadata is built by typed functions whose parameters are ids and enumerations, never free text — and by review | #2 |
+| **Leaving the service erases the person's personal data, ends every membership, and keeps their actor** | In one transaction: **every `organization_members` row for the actor becomes `left`**; **its `team_members` rows are deleted, and its `channel_members` rows once that table exists** (removals recorded in the audit record); the `users` row — email, password — is deleted, **and its sessions with it** (`sessions` references `users` with `ON DELETE CASCADE`); `actors.display_name` and every `organization_members.display_name` for the actor are cleared; `actors.deleted_at` is set. **Without the status change a departed actor would keep active memberships and pass row security.** Deleting the row, rather than emptying columns, means no personal-data column can be left behind. **Refused if the actor is the last active owner of any organization.** Tests: the row is gone, each name is cleared, every organization membership is `left`, no team or channel membership remains, and row security then admits nothing | #2, #11 |
 | **Every organization keeps at least one active owner** | The decision is one pure function in `domain`; the lock and transaction around it are in `db` (see below). `domain` knows nothing about storage | #2 |
 
 ### At least one owner
@@ -124,7 +129,7 @@ lock makes the two orders the same.
 |---|---|---|
 | **Audit records are never changed or removed** | The application role holds no `UPDATE` or `DELETE` on `audit_events`. Tested **connected as that role** | #2 |
 | A change of state and its audit record commit together | The same transaction | #2 |
-| "The system did it" is not expressed as NULL | `actor_kind NOT NULL` **with no default**, and a `CHECK` that `actor_user_id` is present **if and only if** `actor_kind = 'user'` — a `system` record with a user id is refused too | #2 |
+| **Every audit record names the actor who did it** | `audit_events.actor_id NOT NULL`, referencing `actors`. The system is an actor type, so "the system did it" needs no NULL and no special column | #2 |
 | **Audit metadata never holds a secret or personal data** — no token, password, email address or name | Metadata is built by a typed function per action whose parameters are ids and enumerations; callers cannot pass arbitrary JSON or free text. **This is not only tidiness: audit records can never be updated or deleted, so personal data written there could never be erased when someone leaves the service** | #2 |
 
 A wrong audit record is corrected by adding another, not by rewriting the first.
@@ -141,21 +146,21 @@ one table that can never be erased.
 | **The application role cannot bypass row security** | `fukulow_app` is not the table owner, not a superuser, and has no `BYPASSRLS`. No role is ever created with `BYPASSRLS`. **A superuser always bypasses row security**, and an owner does unless `FORCE` is set — which is why the application connects as neither | #2 |
 | The application holds exactly the privileges it needs, and no more | Granted table by table; **no `ALTER DEFAULT PRIVILEGES`**. A test compares actual privileges against the expected set | #2 |
 | Every tenant-owned and cross-tenant table has row security enabled and forced | `ENABLE` and `FORCE ROW LEVEL SECURITY`. A test fails on any such table **that lacks a policy, or has row security not enabled, or not forced** (`pg_class.relrowsecurity`, `relforcerowsecurity`). A policy on a table without `ENABLE` does nothing | #10 |
-| **A query with no identity set sees no row of any tenant-owned or cross-tenant table** | Policies derive visibility from `fukulow.user_id`; unset means no rows, not all rows. **Global tables such as `users` are not covered** — they belong to no organization, and how they are protected is decided in #10 | #10 |
+| **A query with no identity set sees no row of any tenant-owned or cross-tenant table** | Policies derive visibility from `fukulow.actor_id`; unset means no rows, not all rows. **Global tables — `actors`, `users`, `sessions` — are not covered**: they belong to no organization, and how they are protected is decided in #10 | #10 |
 | **Identity never leaks between requests** | `SET LOCAL` inside the transaction, never `SET`. Tested with two transactions on one pooled connection | #10 |
 | Row security is a last wall, not the only one | Repository code still filters tenant-owned data by `organization_id` | #10 |
-| **Row security admits only active members of the organization — not yet members from outside it** | Policies derived from `organization_members` alone. A user from another organization can be stored as a channel member, and row security returns none of that channel's rows to them. **A test asserts this**, so extending it is a conscious change. The policies are extended when connections between organizations are built — a policy change, not a data migration | #10 |
+| **Row security admits only active members of the organization — not yet members from outside it** | Policies derived from `organization_members` alone. An actor from another organization can be stored as a channel member, and row security returns none of that channel's rows to it. **A test asserts this**, so extending it is a conscious change. The policies are extended when connections between organizations are built — a policy change, not a data migration | #10 |
 
 **Why no `ALTER DEFAULT PRIVILEGES`.** It would hand the application `UPDATE` and
 `DELETE` on every new table, including `audit_events`, and depend on someone
 remembering to take them back. **A missing `GRANT` fails loudly the first time the
 code runs. A missing `REVOKE` fails silently forever.**
 
-**Why no operation without an identity.** Row security admits nothing without a
-user. A background job would see no rows and quietly do nothing — or tempt someone
+**Why no operation without an identity.** Row security admits nothing without an
+actor. A background job would see no rows and quietly do nothing — or tempt someone
 to add a bypass. So there are none: expiry is decided when reading
 (`expires_at > now()`), and nothing needs to sweep. A job added later must run in
-one organization's context at a time.
+one organization's context at a time, as an actor that is a member of it.
 
 ## Continuous integration
 

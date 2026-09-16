@@ -10,9 +10,28 @@ are written in.
 ## The tenant is the organization
 
 Every tenant-owned piece of data belongs to exactly one organization.
-**`organizations` is the root** — each row is a tenant. **Users are global**: one
-person can belong to several organizations and keeps the same identity across
-them. Bookkeeping, such as the migration table, belongs to no organization.
+**`organizations` is the root** — each row is a tenant. **Actors are global** (see
+below): one person, bot or integration can belong to several organizations and
+keeps the same identity across them. Bookkeeping, such as the migration table,
+belongs to no organization.
+
+## Who acts
+
+**Every operation is performed by an actor** — a `human`, a `bot`, an `integration`
+or the `system`. Memberships, message authorship and audit records all reference
+the actor, so one set of rules covers all of them: a bot added to an organization is
+isolated exactly as a person is.
+
+A person's email address and password are not on the actor; they are in `users`,
+which belongs to a human actor. Only a person can hold a login session.
+
+**REST, webhooks and WebSocket are ways in, not actors.** An integration that
+reaches Fukulow all three ways is one actor. Every credential — a session, an API
+key, a token — resolves to an actor.
+
+**Something becomes an actor when what it does must be recorded as done by it** —
+posting, reacting, changing a channel. A service Fukulow only reads from is not an
+actor.
 
 **One organization's data is never visible to another** — with one deliberate,
 explicit exception: channel members from outside the organization (below).
@@ -59,10 +78,10 @@ industry — only that mapping changes.**
 
 - **Allow only.** There is no explicit deny. Deciding whether a team-level allow
   beats a channel-level deny is a problem to take on when it is needed, not before
-- **No permissions granted directly to individuals.** A person gets a role; a role
-  has capabilities
-- **An `actor`, not a `user`.** Something other than a person — an integration, a
-  bot — may act one day, and the signature should not have to change
+- **No permissions granted directly to individuals.** An actor gets a role; a role
+  has capabilities — for a person, a bot and an integration alike
+- **Ask about an `actor`.** Capabilities belong to whoever acts, person or not;
+  a token's scopes can narrow them without a second model
 
 ## Two access primitives
 
@@ -83,7 +102,7 @@ this model.
 
 | Scope | Allowed when |
 |---|---|
-| `team` | The actor is a member of **the channel**. Organization membership is **not** a condition — outside members are allowed by the model (see the row-security note below) |
+| `team` | The actor is a member of **the channel**, **and**, if the actor has a membership in the channel's organization, **that membership is active**. An actor with no membership there — a member from outside — is admitted by channel membership alone (see the row-security note below). **A suspended or departed member of the organization is not admitted just because they are still listed in the channel** |
 | `organization` | The actor is an **active member of the organization**. Nobody is listed individually |
 
 **Callers never choose the branch.** The branch is inside the function.
@@ -112,17 +131,17 @@ there.
 Every query in repository code that reads or writes tenant-owned data **below the
 root** filters by organization explicitly; a query on `organizations` itself is
 scoped by its own `id`. Cross-tenant links (`channel_members`) are reached through
-the channel they belong to. Global rows (`users`, `sessions`) are **read in a
-tenant context** — whose name to show in this organization — through a membership;
-**identity lookups that have no tenant context**, such as signing in by email or a
-person who has left every organization, do not need one. PostgreSQL row level security sits underneath as the wall that holds
+the channel they belong to. Global rows (`actors`, `users`, `sessions`) are
+**read in a tenant context** — whose name to show in this organization — through a
+membership; **identity lookups that have no tenant context**, such as signing in by
+email or an actor that has left every organization, do not need one. PostgreSQL row level security sits underneath as the wall that holds
 when something reaches the tables another way.
 
-- The application sets **only** the acting user's id, per transaction, with
-  `SET LOCAL`. **Which organizations that user may see is derived by the database**
-  from their organization memberships. Letting the application declare the
+- The application sets **only** the acting actor's id, `fukulow.actor_id`, per
+  transaction, with `SET LOCAL`. **Which organizations that actor may see is derived
+  by the database** from its organization memberships. Letting the application declare the
   organization would trust it exactly as much as the `WHERE` clause already does
-- **With no user set, no rows are visible.** Forgetting to set it produces an empty
+- **With no actor set, no rows are visible.** Forgetting to set it produces an empty
   result, not another organization's data
 - The application role cannot bypass row security: it does not own the tables,
   is not a superuser, and has no `BYPASSRLS`. A superuser always bypasses policies,
@@ -146,5 +165,5 @@ The enforcement details and how each is tested are in
 - Who may post to an organization-scoped channel — this belongs to the channel
   (`everyone` or administrators only), not to a job title, and is not built yet
 - How connections between organizations are requested and approved
-- How users are protected by row security — they belong to no organization, so the
+- How actors and users are protected by row security — they belong to no organization, so the
   organization-based policy does not apply. Decided and measured in #10

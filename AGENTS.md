@@ -22,13 +22,17 @@ wrong.
   Not in errors either
 - **Never read or write tenant-owned data without filtering by `organization_id`.**
   `organizations` itself is the root and is scoped by its own `id`.
-  `channel_members` (cross-tenant) is reached through its channel. `users` is
-  global: in a tenant context reach it through a membership; signing in and other
-  identity lookups need none. Never write application SQL outside the `db` crate —
+  `channel_members` (cross-tenant) is reached through its channel. `actors`, `users`
+  and `sessions` are global: in a tenant context reach them through a membership;
+  signing in and other identity lookups need none. Never write application SQL outside the `db` crate —
   migrations are the exception
+- **Never point authorship, membership or audit at `users`.** They reference
+  `actors`. `users` holds a person's email address and password. **Display names are
+  the only personal data stored outside it**, and only in `actors.display_name` and
+  `organization_members.display_name`. No other copy of personal data is persisted
 - **Never decide access by role name.** Ask for a capability
-- **Never use `SET` for the row-security user; use `SET LOCAL`** inside the
-  transaction
+- **Never use `SET` for the row-security actor (`fukulow.actor_id`); use
+  `SET LOCAL`** inside the transaction
 - **Never create a role with `BYPASSRLS`, and never use
   `ALTER DEFAULT PRIVILEGES`**
 - **Never `UPDATE` or `DELETE` an audit record**
