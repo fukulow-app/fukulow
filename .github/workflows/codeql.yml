@@ -1,5 +1,10 @@
 # Static analysis for vulnerabilities, in the Rust code and in these workflows.
 #
+# The analyze jobs succeed whether or not they find anything: they upload results.
+# What turns red on a finding is the separate "CodeQL" check that code scanning
+# adds to a pull request when it introduces a new alert. That is the check to
+# require -- requiring the analyze jobs would require nothing about findings.
+#
 # Not a required check yet. A first run can report a baseline of findings that
 # have nothing to do with the pull request in front of it; it becomes required
 # once it is green on main, so that red means something this change introduced.

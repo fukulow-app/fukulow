@@ -19,5 +19,9 @@ updates:
     cooldown:
       default-days: 7
     groups:
+      # Majors stay out of the group, so each arrives as its own pull request. A
+      # breaking checkout or toolchain change bundled with routine bumps would make
+      # a failure impossible to attribute.
       actions:
         patterns: ["*"]
+        update-types: [minor, patch]

@@ -166,14 +166,15 @@ one organization's context at a time.
 | **The tools that check the workflows are pinned too** | An explicit `version:` on zizmor. The action's default is `latest` | #18 |
 | A checkout does not leave credentials on disk | `persist-credentials: false`; zizmor | #18 |
 | No attacker-controlled value is interpolated into a `run:` script | Values pass through environment variables; zizmor | #18 |
-| **A workflow's failure means one thing** | One concern per workflow: `build` (the code), `audit` (a dependency), `dco` (sign-off), `codeql` (a likely vulnerability), `zizmor` (a risky workflow) | #18 |
-| Every commit is signed off | `dco`. **Exempt only when the pull request was opened by Dependabot and the commit's author is Dependabot** — the pull request's author cannot be forged, a commit's author name can | #18 |
+| **A workflow's failure means one thing** | One concern per workflow: `build` (the code), `audit` (a dependency), `dco` (sign-off), `zizmor` (a risky workflow). **For CodeQL, the `analyze` jobs succeed even when they find something**; a new alert is reported by the separate `CodeQL` check code scanning adds to the pull request, and that is the one that means "a likely vulnerability" | #18 |
+| Every commit is signed off | `dco`. **Exempt only when the pull request was opened by Dependabot and the commit's author name and email are both Dependabot's.** The pull request's author cannot be forged, so nobody outside the repository can use this. A commit's author can — but only people with write access can push to a Dependabot branch, so the exemption trusts maintainers | #18 |
 | A secret is refused before it reaches the repository | Secret scanning push protection. The local hook only protects people who installed it | #18 |
 | A new analysis is not required until it is green on `main` | Branch protection is updated after the first clean run, so a baseline does not block unrelated work | #18 |
 
-**Jobs have no `name:`** on purpose: their ids are the status check names that
-branch protection requires, and naming them would silently change what `main`
-waits for.
+**The required jobs — `build`, `audit`, `signed-off-by` — have no `name:`** on
+purpose: their ids are the status check names branch protection requires, and
+naming them would silently change what `main` waits for. The CodeQL matrix job is
+named, because it is not required and its language has to be visible.
 
 ## Code
 
