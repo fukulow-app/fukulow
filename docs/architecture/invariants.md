@@ -157,6 +157,24 @@ to add a bypass. So there are none: expiry is decided when reading
 (`expires_at > now()`), and nothing needs to sweep. A job added later must run in
 one organization's context at a time.
 
+## Continuous integration
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| **Every workflow declares its permissions**, and they are the least it needs | `permissions:` in the file; zizmor. Inherited permissions can be read-write and can change in settings without the file changing | #18 |
+| **Every action is pinned to a full commit SHA**, with its version in a comment | zizmor. A tag can be moved to different code after review; Dependabot keeps the pins current | #18 |
+| **The tools that check the workflows are pinned too** | An explicit `version:` on zizmor. The action's default is `latest` | #18 |
+| A checkout does not leave credentials on disk | `persist-credentials: false`; zizmor | #18 |
+| No attacker-controlled value is interpolated into a `run:` script | Values pass through environment variables; zizmor | #18 |
+| **A workflow's failure means one thing** | One concern per workflow: `build` (the code), `audit` (a dependency), `dco` (sign-off), `codeql` (a likely vulnerability), `zizmor` (a risky workflow) | #18 |
+| Every commit is signed off | `dco`. **Exempt only when the pull request was opened by Dependabot and the commit's author is Dependabot** — the pull request's author cannot be forged, a commit's author name can | #18 |
+| A secret is refused before it reaches the repository | Secret scanning push protection. The local hook only protects people who installed it | #18 |
+| A new analysis is not required until it is green on `main` | Branch protection is updated after the first clean run, so a baseline does not block unrelated work | #18 |
+
+**Jobs have no `name:`** on purpose: their ids are the status check names that
+branch protection requires, and naming them would silently change what `main`
+waits for.
+
 ## Code
 
 | Invariant | Enforced by | Lands in |
