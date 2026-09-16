@@ -45,7 +45,9 @@ self-hoster has run it.
   missing `GRANT` fails loudly, a missing `REVOKE` never does.
 - **Flag** any role created or altered with `BYPASSRLS`. Never allowed.
 - **Flag** `UPDATE` or `DELETE` on `audit_events` granted to `fukulow_app`.
-- **Flag** `GRANT UPDATE ON <table>` without a column list. `UPDATE` is granted on
+- **Flag** any grant that confers `UPDATE` on a whole table — whatever it is spelled
+  as: `GRANT UPDATE ON`, `GRANT SELECT, UPDATE ON`, `GRANT ALL [PRIVILEGES] ON`, or
+  `ON ALL TABLES IN SCHEMA`. `UPDATE` is granted with a column list, on
   named columns only, and never on an `id`, `organization_id`, `actor_id`,
   `actors.type`, `invites.kind` or `token_hash`: a table-level grant lets a departed
   person's actor, or a bot's, be rewritten as another type.
