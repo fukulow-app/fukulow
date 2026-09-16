@@ -25,7 +25,7 @@ say which item. Do not comment when it does not.
 
 - **Flag** a display name, email address or other personal data written into
   `jsonb` or other structured metadata — audit metadata in particular. Display
-  names live only in `users` and `organization_members`. Audit records can never be
+  names live only in `actors` and `organization_members`. Audit records can never be
   updated or deleted, so personal data written there could never be erased.
 - **Flag** an audit metadata constructor that accepts free text (`String`, `&str`,
   `serde_json::Value`) rather than ids and enumerations.
@@ -36,8 +36,12 @@ say which item. Do not comment when it does not.
   `UPDATE` or `DELETE` — that is not scoped by `organization_id`. An `INSERT`
   that does not set it, or an `UPDATE`/`DELETE` that does not filter by it, is as
   much a violation as a `SELECT`.
-  `channel_members` (cross-tenant) and `users` (global) have no such column and are
-  reached through a channel or a membership; do not flag those for its absence.
+  `channel_members` (cross-tenant), `actors` and `users` (global) have no such
+  column and are reached through a channel or a membership; do not flag those for
+  its absence.
+- **Flag** authorship, membership or an audit record that references `users` rather
+  than `actors`. Every operation is performed by an actor; `users` holds only a
+  person's email address and password.
 - **Flag** application SQL outside the `db` crate. SQL under `migrations/` is not
   flagged.
 

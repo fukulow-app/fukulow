@@ -40,13 +40,18 @@ self-hoster has run it.
   missing `GRANT` fails loudly, a missing `REVOKE` never does.
 - **Flag** any role created or altered with `BYPASSRLS`. Never allowed.
 - **Flag** `UPDATE` or `DELETE` on `audit_events` granted to `fukulow_app`.
-- **Flag** `DELETE` on `users` or `organization_members` granted to `fukulow_app`.
-  Those rows are never deleted.
+- **Flag** `DELETE` on `actors` or `organization_members` granted to `fukulow_app`.
+  Those rows are never deleted. (`DELETE` on `users` is expected: a person's `users`
+  row is deleted when they leave the service.)
 
 ## Columns
 
-- **Flag** a column that stores a display name in any table other than `users` or
+- **Flag** a column that stores a display name in any table other than `actors` or
   `organization_members`.
+- **Flag** a foreign key for membership, authorship or audit that references
+  `users` instead of `actors`, and an `organization_id` on `actors` — actors are
+  global.
 - **Flag** a default on `invites.kind`, `channels.scope` or
-  `audit_events.actor_kind`. A default would guess their meaning.
-- **Flag** an email column indexed or looked up without `lower(...)`.
+  `actors.type`. A default would guess their meaning.
+- **Flag** an email column indexed or looked up without `lower(email COLLATE "C")`.
+  Without the collation, case folding depends on the server's locale.
