@@ -102,7 +102,7 @@ this model.
 
 | Scope | Allowed when |
 |---|---|
-| `team` | The actor is a member of **the channel**. Organization membership is **not** a condition — outside members are allowed by the model (see the row-security note below) |
+| `team` | The actor is a member of **the channel**, **and**, if the actor has a membership in the channel's organization, **that membership is active**. An actor with no membership there — a member from outside — is admitted by channel membership alone (see the row-security note below). **A suspended or departed member of the organization is not admitted just because they are still listed in the channel** |
 | `organization` | The actor is an **active member of the organization**. Nobody is listed individually |
 
 **Callers never choose the branch.** The branch is inside the function.

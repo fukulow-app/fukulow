@@ -28,8 +28,13 @@ self-hoster has run it.
   `UNIQUE (id, organization_id)`; otherwise the child can claim another
   organization. **`channel_members` is exempt**: it is cross-tenant by design and
   must not carry this constraint.
-- **Flag** a composite foreign key with a nullable column and no comment saying the
-  key is **not checked** when that column is NULL. It looks enforced otherwise.
+- **Flag** a nullable column in a composite foreign key, other than
+  `channels.team_id` and `invites.target_team_id`. A NULL in any column makes the
+  key unchecked, and a `CHECK` passes on NULL — the constraint silently turns off.
+  For those two, flag the absence of a comment saying the key is not checked when
+  the column is NULL.
+- **Flag** an actor reference — `sender_actor_id`, `actor_id`,
+  `created_by_actor_id` — that is not `NOT NULL`. A foreign key alone allows NULL.
 - **Flag** a new tenant-owned or cross-tenant table without both `ENABLE` and
   `FORCE ROW LEVEL SECURITY` — **if any existing migration already enables row
   security**. Before row security is introduced, tables have none by design.

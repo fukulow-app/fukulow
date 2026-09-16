@@ -27,8 +27,9 @@ wrong.
   signing in and other identity lookups need none. Never write application SQL outside the `db` crate —
   migrations are the exception
 - **Never point authorship, membership or audit at `users`.** They reference
-  `actors`. `users` holds a person's personal data — email address and password —
-  and no other personal data lives anywhere else
+  `actors`. `users` holds a person's email address and password. **Display names are
+  the only personal data stored outside it**, and only in `actors.display_name` and
+  `organization_members.display_name`. No other copy of personal data is persisted
 - **Never decide access by role name.** Ask for a capability
 - **Never use `SET` for the row-security actor (`fukulow.actor_id`); use
   `SET LOCAL`** inside the transaction

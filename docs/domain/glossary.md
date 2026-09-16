@@ -32,7 +32,7 @@ will use this.
 | **organization member** | An actor's membership of one organization. Carries the role, the status and an optional display name for that organization |
 | **status** | `active`, `suspended` or `left`. **A security rule, not a label** — row security only admits `active` members |
 | **display name** | Always the current one. Held in exactly two places: `actors.display_name`, and an optional per-organization override in `organization_members`. Past messages show the name as it is now |
-| **leaving the service** | Every membership of the actor becomes `left`, the person's `users` row and sessions are deleted, their display names are cleared, and the actor stays with `deleted_at` set — so past messages keep their author. Refused for the last active owner of an organization |
+| **leaving the service** | Every **organization** membership of the actor becomes `left` and its team and channel memberships are deleted; the person's `users` row and sessions are deleted; their display names are cleared, and the actor stays with `deleted_at` set — so past messages keep their author. Refused for the last active owner of an organization |
 
 ## Channels
 
