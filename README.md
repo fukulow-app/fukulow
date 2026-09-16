@@ -16,7 +16,7 @@ flat team:
 |---|---|
 | **organization** | A company or other body. Everything below it belongs to one. |
 | **team** | A grouping inside an organization. People are placed into the teams they belong to. |
-| **channel** | Where a conversation happens. Lives inside a team. |
+| **channel** | Where a conversation happens. Owned by a team, or directly by the organization — a company-wide channel belongs to no team. |
 | **direct** | A one-to-one or small-group conversation. |
 
 A person is not owned by an organization. One account can belong to several,

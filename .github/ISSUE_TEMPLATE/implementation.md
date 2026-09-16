@@ -24,6 +24,15 @@ labels: ''
 |---|---|---|---|
 | | | | |
 
+## Published documents
+
+<!-- Which rows or sections in docs/ or AGENTS.md this issue makes true or fills
+     in. The pull request that closes this issue updates them — not a later one.
+     Find them with: git grep -n "#<this issue>" -- docs AGENTS.md README.md
+     If none, write "None". -->
+
+None
+
 ## Out of scope
 
 <!-- What this deliberately does not do, so review does not ask for it. -->
