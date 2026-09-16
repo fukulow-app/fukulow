@@ -1,0 +1,21 @@
+# Files that change how this project is reviewed, built, secured, or what its
+# data must satisfy.
+#
+# Declared, not yet enforced. With one maintainer, the author of every pull request
+# and the only code owner are the same person, and an author cannot approve their
+# own pull request -- so requiring code-owner review would block all merges. It is
+# switched on when outside contributions start.
+#
+# These matter more than most files because Copilot reads its review instructions
+# from the pull request's own branch: editing them changes the review of that same
+# pull request.
+
+/.github/copilot-instructions.md    @tkakkie
+/.github/instructions/              @tkakkie
+/.github/workflows/                 @tkakkie
+/.github/CODEOWNERS                 @tkakkie
+/AGENTS.md                          @tkakkie
+/deny.toml                          @tkakkie
+/migrations/                        @tkakkie
+/docs/architecture/invariants.md    @tkakkie
+/docs/security/                     @tkakkie
