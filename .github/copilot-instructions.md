@@ -21,6 +21,15 @@ say which item. Do not comment when it does not.
   password, email address or invite link**, including values interpolated into an
   error that is later logged.
 
+## Personal data in stored metadata
+
+- **Flag** a display name, email address or other personal data written into
+  `jsonb` or other structured metadata — audit metadata in particular. Display
+  names live only in `users` and `organization_members`. Audit records can never be
+  updated or deleted, so personal data written there could never be erased.
+- **Flag** an audit metadata constructor that accepts free text (`String`, `&str`,
+  `serde_json::Value`) rather than ids and enumerations.
+
 ## Tenant isolation
 
 - **Flag** a query on tenant-owned data that does not filter by `organization_id`.
