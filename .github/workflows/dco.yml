@@ -8,6 +8,12 @@ name: dco
 on:
   pull_request:
 
+# Declared rather than inherited: the repository default can be read-write, and
+# can be changed in settings without this file changing. The check only reads
+# commits.
+permissions:
+  contents: read
+
 jobs:
   signed-off-by:
     runs-on: ubuntu-latest
