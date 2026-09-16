@@ -1,0 +1,9 @@
+DROP TABLE audit_events;
+DROP TABLE sessions;
+DROP TABLE invites;
+DROP TABLE team_members;
+DROP TABLE teams;
+DROP TABLE organization_members;
+DROP TABLE organizations;
+DROP TABLE users;
+DROP TABLE actors;

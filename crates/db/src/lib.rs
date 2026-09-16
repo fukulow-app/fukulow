@@ -1,3 +1,9 @@
-//! Owns persistence and is the only crate allowed to write SQL. Callers must
-//! not bypass it: every organization-scoped read must go through this crate
-//! and filter by `organization_id`, so tenant isolation has one boundary.
+//! The persistence boundary. Tenant operations scope every query to the named
+//! organization; callers supply authorization before entering this crate.
+
+mod audit;
+mod connection;
+mod operations;
+
+pub use connection::{ConnectError, connect};
+pub use operations::*;

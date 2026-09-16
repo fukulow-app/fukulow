@@ -1,0 +1,74 @@
+name: database
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fukulow
+          POSTGRES_PASSWORD: fukulow # Ephemeral CI database only. gitleaks:allow
+          POSTGRES_DB: fukulow_dev
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U fukulow -d fukulow_dev"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      # Ephemeral CI credentials match the development role setup. gitleaks:allow
+      DATABASE_URL: postgres://fukulow_app:fukulow_app@127.0.0.1:15432/fukulow_dev
+      # DDL and isolated test database creation only. gitleaks:allow
+      MIGRATOR_DATABASE_URL: postgres://fukulow_migrator:fukulow_migrator@127.0.0.1:15432/fukulow_dev
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+          rustflags: ""
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-database-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
+        with:
+          tool: sqlx-cli@0.9.0
+      - name: Create database roles separately from migrations
+        env:
+          PGPASSWORD: fukulow # Ephemeral CI database only. gitleaks:allow
+        run: psql -h 127.0.0.1 -p 15432 -U fukulow -d fukulow_dev -v ON_ERROR_STOP=1 -f docker/init/001-roles.sql
+      - name: Exercise empty and populated migration reversals
+        run: |
+          cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
+          cargo sqlx migrate revert --database-url "$MIGRATOR_DATABASE_URL"
+          cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f crates/db/tests/fixtures/populated.sql
+          cargo sqlx migrate revert --database-url "$MIGRATOR_DATABASE_URL"
+          cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
+      - name: Verify the actual server and nonempty migration history
+        run: |
+          psql "$MIGRATOR_DATABASE_URL" -v ON_ERROR_STOP=1 -c 'SELECT current_database(), version();'
+          test "$(psql "$MIGRATOR_DATABASE_URL" -Atc 'SELECT current_database()')" = fukulow_dev
+          test "$(psql "$MIGRATOR_DATABASE_URL" -Atc "SELECT current_setting('server_version_num')::int / 10000")" = 17
+          test "$(psql "$MIGRATOR_DATABASE_URL" -Atc 'SELECT count(*) FROM _sqlx_migrations WHERE success')" -gt 0
+      - run: cargo test --locked --all
+      - name: Check committed SQLx metadata against PostgreSQL
+        run: DATABASE_URL="$MIGRATOR_DATABASE_URL" SQLX_OFFLINE=false cargo sqlx prepare --workspace --check -- --all-targets

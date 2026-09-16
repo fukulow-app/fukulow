@@ -14,3 +14,8 @@ pub(crate) fn bind_address() -> Result<SocketAddr> {
         }
     }
 }
+
+pub(crate) fn database_url() -> Result<String> {
+    env::var("DATABASE_URL")
+        .map_err(|_| anyhow!("DATABASE_URL is required and must be valid Unicode"))
+}

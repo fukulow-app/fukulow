@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organization_members SET role = $3 WHERE organization_id = $1 AND actor_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "14c505416cd8b89bd92c168f31b2e7c9c4a716cee568dd9c581f3cf01b5596f8"
+}

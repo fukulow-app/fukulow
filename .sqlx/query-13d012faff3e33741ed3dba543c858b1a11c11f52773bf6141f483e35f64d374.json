@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organization_members SET status = 'suspended' WHERE organization_id = $1 AND actor_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "13d012faff3e33741ed3dba543c858b1a11c11f52773bf6141f483e35f64d374"
+}

@@ -19,7 +19,6 @@ pub(crate) struct AppProcess {
 impl AppProcess {
     pub(crate) fn spawn(mut command: Command) -> Result<Self> {
         command
-            .env_remove("DATABASE_URL")
             .env("FUKULOW_BIND_ADDR", "127.0.0.1:0")
             .env("RUST_LOG", "info");
         Self::spawn_configured(command)
