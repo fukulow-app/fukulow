@@ -32,7 +32,10 @@ say which item. Do not comment when it does not.
 
 ## Tenant isolation
 
-- **Flag** a query on tenant-owned data that does not filter by `organization_id`.
+- **Flag** a read **or write** of tenant-owned data — `SELECT`, `INSERT`,
+  `UPDATE` or `DELETE` — that is not scoped by `organization_id`. An `INSERT`
+  that does not set it, or an `UPDATE`/`DELETE` that does not filter by it, is as
+  much a violation as a `SELECT`.
   `channel_members` (cross-tenant) and `users` (global) have no such column and are
   reached through a channel or a membership; do not flag those for its absence.
 - **Flag** application SQL outside the `db` crate. SQL under `migrations/` is not

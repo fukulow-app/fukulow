@@ -21,10 +21,13 @@ self-hoster has run it.
 
 - **Flag** a tenant-owned table, other than `organizations` itself, without
   `organization_id NOT NULL`.
-- **Flag** a child that references a tenant-owned parent by `parent_id` alone.
-  The reference is a **composite** foreign key `(parent_id, organization_id)`
-  against a parent with `UNIQUE (id, organization_id)` — otherwise the child can
-  claim another organization.
+- **Flag** a foreign key from a tenant-owned table to a tenant-owned parent that
+  **does not include `organization_id`**, whatever the other column is called —
+  `team_id`, `channel_id`, an invite target. The reference is composite,
+  `(<parent key>, organization_id)`, against a parent with
+  `UNIQUE (id, organization_id)`; otherwise the child can claim another
+  organization. **`channel_members` is exempt**: it is cross-tenant by design and
+  must not carry this constraint.
 - **Flag** a composite foreign key with a nullable column and no comment saying the
   key is **not checked** when that column is NULL. It looks enforced otherwise.
 - **Flag** a new tenant-owned or cross-tenant table without both `ENABLE` and
