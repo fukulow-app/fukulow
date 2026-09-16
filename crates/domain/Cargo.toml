@@ -8,7 +8,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-
+uuid = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
 
 # Not inherited automatically: a member that omits this table is silently
 # unlinted while the workspace still looks configured.

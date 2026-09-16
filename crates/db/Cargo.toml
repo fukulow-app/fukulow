@@ -9,6 +9,17 @@ publish = false
 
 [dependencies]
 domain = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Integration tests run operations genuinely concurrently; a current-thread
+# runtime would interleave them only at await points and hide the race.
+tokio = { workspace = true }
 
 # Not inherited automatically: a member that omits this table is silently
 # unlinted while the workspace still looks configured.
