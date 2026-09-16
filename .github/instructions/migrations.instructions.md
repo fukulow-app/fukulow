@@ -56,6 +56,11 @@ self-hoster has run it.
 - **Flag** a foreign key for membership, authorship or audit that references
   `users` instead of `actors`, and an `organization_id` on `actors` — actors are
   global.
+- **Flag** a `users` table whose `actor_type` is not `NOT NULL`, is not fixed by
+  `CHECK (actor_type = 'human')`, or is not part of the composite foreign key
+  `(actor_id, actor_type) → actors (id, type)`. **All three are needed:** without
+  `NOT NULL`, a bot's id with `actor_type = NULL` passes both the `CHECK` and the
+  key, and a bot receives a `users` row — and with it a login session.
 - **Flag** a default on `invites.kind`, `channels.scope`, `actors.type` or
   `audit_events.actor_id`. A default would guess their meaning — and a default
   actor would attribute an audit record to someone who did not do it.
