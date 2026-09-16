@@ -1,0 +1,151 @@
+# Invariants
+
+Rules that must always hold. **Each one says how it is enforced and how that
+enforcement is shown to work.** A rule with neither is a wish, not an invariant.
+
+Most of the data invariants describe the schema being built in #2, #11 and #10.
+The **Lands in** column says whether a rule is already in place or which issue
+brings it; until then it is the contract that issue is implemented against.
+
+## How invariants are enforced, in order of preference
+
+1. **A constraint** — `NOT NULL`, `CHECK`, `FOREIGN KEY`, `UNIQUE`. Holds even if
+   the code forgets
+2. **A privilege** — `GRANT`, `REVOKE`, row security. Holds even if the code is
+   wrong
+3. **One place in code, serialised by a row lock** — only when neither of the
+   above can express the rule, and the reason is written down
+
+A test **breaks each invariant and watches it be refused.** A test that only shows
+the happy path says nothing about whether the guard exists.
+
+## Tenancy
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| Every tenant-owned row carries the `organization_id` of the organization it belongs to | `NOT NULL` | #2, #11 |
+| **A child row's `organization_id` agrees with its parent's** | Composite foreign key `(parent_id, organization_id) → parent (id, organization_id)` | #2, #11 |
+| **A team member is a member of that team's organization** | Composite foreign keys from `team_members` to both `teams` and `organization_members` | #2 |
+| **A channel member need not be a member of the channel's organization** | The absence of the constraint above on `channel_members` — deliberate, and tested in the allowed direction | #11 |
+| **An invite cannot point at anything outside its own organization** | One target column per kind, each with a composite foreign key through the invite's `organization_id`, and a `CHECK` that the right one is filled | #2 |
+| The composite foreign key from `channels` to `teams` is **not** checked when `team_id` is NULL | Default behaviour of a composite key; asserted by a test and stated in a schema comment, because it looks enforced | #11 |
+
+## Identity
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| A user row is never deleted | The application role holds no `DELETE` on `users` | #2 |
+| An organization membership row is never deleted — only its `status` changes | The application role holds no `DELETE` on `organization_members` | #2 |
+| A team membership row **may** be deleted | Nothing references it, and its removal is recorded in `audit_events` | #2 |
+| An active user has an email address | `CHECK (deleted_at IS NOT NULL OR email IS NOT NULL)` | #2 |
+| Active users' email addresses are unique, ignoring case | `UNIQUE INDEX ON users (lower(email)) WHERE deleted_at IS NULL`. Lookups must use `lower(email) = lower($1)` or the index is silently skipped | #2 |
+| **No table stores a copy of a display name** | A test reads `information_schema.columns` and fails on an unexpected name-like column | #2 |
+| Leaving the service erases every personal-data column and keeps `users.id` | The personal-data columns are listed in one place in code; a test checks each column individually | #2 |
+| **Every organization keeps at least one active owner** | One place in `domain`, which first locks the organization row (see below) | #2 |
+
+### At least one owner
+
+Not expressible as a constraint: "at least one row" is neither a `CHECK` nor a
+`UNIQUE`.
+
+**It cannot be held without a lock.** Two administrators demote the two remaining
+owners at the same moment; each counts two owners, each is allowed, both commit,
+and there are none. So every change to `role` or `status` begins with:
+
+```sql
+SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE;
+```
+
+Changes to one organization's owners then happen one at a time, and a count stays
+true until the write that depends on it.
+
+Owners may be several. **The last active owner cannot be demoted, suspended or
+leave.** Creating an organization and making its creator the owner is one
+transaction.
+
+**Tested by running two demotions genuinely concurrently.** A sequential test
+cannot exercise the interleaving that breaks this.
+
+## Invites
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| Every invite has a kind, and there is no default | `NOT NULL`, no `DEFAULT` | #2 |
+| Every invite expires | `expires_at NOT NULL` | #2 |
+| A token is never stored | Only `token_hash` exists | #2 |
+| **An invite is never used more times than allowed** | One conditional statement decides and increments together; `CHECK (used_count <= max_uses)` as a backstop | #2, #3 |
+
+```sql
+UPDATE invites
+   SET used_count = used_count + 1
+ WHERE id = $1
+   AND used_count < max_uses
+   AND revoked_at IS NULL
+   AND expires_at > now()
+RETURNING ...;
+```
+
+Zero rows means refused. **Reading `used_count` and deciding in code lets two
+people both see "one use left".** Tested by accepting an invite with
+`max_uses = 1` from many concurrent requests and admitting exactly one person.
+
+## Messages
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| Within a channel, `channel_seq` has no gap and no duplicate | The number is taken with `UPDATE channels SET next_message_seq = next_message_seq + 1 ... RETURNING`, which locks the channel row; plus `UNIQUE (channel_id, channel_seq)` | #11 |
+| **Ordering and cursors use `channel_seq`, never a message id** | Contract | #11, #6 |
+| A repeated client-generated message id does not create a second message | `PRIMARY KEY (id)` | #11 |
+
+**Why not the message id, or a global sequence.** A client-generated id is ordered
+by the client's clock, which can be wrong. More fundamentally, **the order in which
+values are handed out is not the order in which transactions commit** — true of a
+global `bigserial` too. A reader can move its cursor past a row that has not become
+visible yet and never see it. A per-channel counter taken under the channel's row
+lock makes the two orders the same.
+
+## Audit
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| **Audit records are never changed or removed** | The application role holds no `UPDATE` or `DELETE` on `audit_events`. Tested **connected as that role** | #2 |
+| A change of state and its audit record commit together | The same transaction | #2 |
+| "The system did it" is not expressed as NULL | `actor_kind NOT NULL`, with a `CHECK` tying `actor_kind = 'user'` to a non-null `actor_user_id` | #2 |
+| Audit metadata never holds a secret | Metadata is built by a typed function per action; callers cannot pass arbitrary JSON | #2 |
+
+A wrong audit record is corrected by adding another, not by rewriting the first.
+
+## Privileges and row security
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| **The application does not own its tables** | Separate `fukulow_migrator` and `fukulow_app` roles. An owner bypasses row security | #2 |
+| **No role can bypass row security** | No role is created with `BYPASSRLS` — not now, not later | #2 |
+| The application holds exactly the privileges it needs, and no more | Granted table by table; **no `ALTER DEFAULT PRIVILEGES`**. A test compares actual privileges against the expected set | #2 |
+| Every tenant-owned and cross-tenant table has row security enabled and forced | `ENABLE` and `FORCE ROW LEVEL SECURITY`; a test fails on any such table without a policy | #10 |
+| **A query with no identity set sees nothing** | Policies derive visibility from `fukulow.user_id`; unset means no rows, not all rows | #10 |
+| **Identity never leaks between requests** | `SET LOCAL` inside the transaction, never `SET`. Tested with two transactions on one pooled connection | #10 |
+| Row security is a last wall, not the only one | Repository code still filters by `organization_id` | #10 |
+
+**Why no `ALTER DEFAULT PRIVILEGES`.** It would hand the application `UPDATE` and
+`DELETE` on every new table, including `audit_events`, and depend on someone
+remembering to take them back. **A missing `GRANT` fails loudly the first time the
+code runs. A missing `REVOKE` fails silently forever.**
+
+**Why no operation without an identity.** Row security admits nothing without a
+user. A background job would see no rows and quietly do nothing — or tempt someone
+to add a bypass. So there are none: expiry is decided when reading
+(`expires_at > now()`), and nothing needs to sweep. A job added later must run in
+one organization's context at a time.
+
+## Code
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| No `unsafe` | `unsafe_code = "forbid"` in `[workspace.lints]`, inherited by every crate. **Not** repeated as `#![forbid]` in files — that would make it impossible to tell which one is doing the work | in place |
+| No `unwrap()`, `expect()` or `panic!` on a request path | Review. `expect` only where failing to start is correct, naming what is missing and never a value | in place |
+| **Logs never contain a message body, token, password, email address or invite link** | Review, and tests on failure paths | in place |
+| **Authorization asks for a capability, never a role name** | `can(actor, Capability::...)` in `domain`; `if role == ...` is refused in review | #5 |
+| Whether someone may see something is decided by one of two primitives | `is_organization_member`, `can_access_channel`; the second branches on the channel's scope internally, so callers never choose | #5 |
+| Something the caller cannot see is reported as not found | 404, indistinguishable from nonexistent | #5 |
+| No Japanese text on screen is written in source code | Strings go through the translation file | #7 |
