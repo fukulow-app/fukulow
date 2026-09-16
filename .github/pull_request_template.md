@@ -27,6 +27,11 @@ Closes #
 - [ ] Japanese strings go through the translation file, not into the code
 - [ ] **This changes an invariant** — if checked, `docs/architecture/invariants.md`
       is updated in this pull request, and says how the new rule is enforced
+- [ ] **Every published document that names the issue this closes is updated in
+      this pull request** — a row saying `Lands in #N` for it now says `in place`,
+      and a gap the document says this issue fills is filled. Check with
+      `git grep -n "#N" -- docs AGENTS.md README.md`. After merge, main is
+      protected, so a document left behind stays wrong until another pull request
 - [ ] **This touches something that would need a full data migration to change**
       (identifier scheme, naming, tenant isolation, cursor meaning, frame shape)
       — if checked, say which, and confirm the issue says so too
