@@ -45,12 +45,19 @@ self-hoster has run it.
   missing `GRANT` fails loudly, a missing `REVOKE` never does.
 - **Flag** any role created or altered with `BYPASSRLS`. Never allowed.
 - **Flag** `UPDATE` or `DELETE` on `audit_events` granted to `fukulow_app`.
+- **Flag** `GRANT UPDATE ON <table>` without a column list. `UPDATE` is granted on
+  named columns only, and never on an `id`, `organization_id`, `actor_id`,
+  `actors.type`, `invites.kind` or `token_hash`: a table-level grant lets a departed
+  person's actor, or a bot's, be rewritten as another type.
 - **Flag** `DELETE` on `actors` or `organization_members` granted to `fukulow_app`.
   Those rows are never deleted. (`DELETE` on `users` is expected: a person's `users`
   row is deleted when they leave the service.)
 
 ## Columns
 
+- **Flag** a column that is not `NOT NULL` when the pull request does not name it as
+  nullable and say why. A `CHECK` passes on NULL, a `UNIQUE` admits many NULLs, and
+  a `DEFAULT` does not stop an explicit NULL.
 - **Flag** a column that stores a display name in any table other than `actors` or
   `organization_members`.
 - **Flag** a foreign key for membership, authorship or audit that references
