@@ -21,9 +21,11 @@ wrong.
 - **Never log a message body, token, password, email address or invite link.**
   Not in errors either
 - **Never read or write tenant-owned data without filtering by `organization_id`.**
-  `channel_members` (cross-tenant) is reached through its channel, and `users`
-  (global) through a membership. Never write application SQL outside the `db`
-  crate — migrations are the exception
+  `organizations` itself is the root and is scoped by its own `id`.
+  `channel_members` (cross-tenant) is reached through its channel. `users` is
+  global: in a tenant context reach it through a membership; signing in and other
+  identity lookups need none. Never write application SQL outside the `db` crate —
+  migrations are the exception
 - **Never decide access by role name.** Ask for a capability
 - **Never use `SET` for the row-security user; use `SET LOCAL`** inside the
   transaction

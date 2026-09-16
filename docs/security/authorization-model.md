@@ -109,10 +109,13 @@ there.
 
 ## Row security is the last wall, not the first
 
-Every query in repository code that reads tenant-owned data filters by
-organization explicitly. Cross-tenant links (`channel_members`) are reached
-through the channel they belong to, and global rows (`users`) through a
-membership. PostgreSQL row level security sits underneath as the wall that holds
+Every query in repository code that reads or writes tenant-owned data **below the
+root** filters by organization explicitly; a query on `organizations` itself is
+scoped by its own `id`. Cross-tenant links (`channel_members`) are reached through
+the channel they belong to. Global rows (`users`, `sessions`) are **read in a
+tenant context** — whose name to show in this organization — through a membership;
+**identity lookups that have no tenant context**, such as signing in by email or a
+person who has left every organization, do not need one. PostgreSQL row level security sits underneath as the wall that holds
 when something reaches the tables another way.
 
 - The application sets **only** the acting user's id, per transaction, with

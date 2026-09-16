@@ -23,7 +23,7 @@ Closes #
 - [ ] `cargo fmt --all --check`
 - [ ] `cargo clippy --all-targets -- -D warnings`
 - [ ] `cargo test --all`
-- [ ] No message bodies, tokens, email addresses or invite links reach the logs
+- [ ] No message bodies, tokens, passwords, email addresses or invite links reach the logs
 - [ ] Japanese strings go through the translation file, not into the code
 - [ ] **This changes an invariant** — if checked, `docs/architecture/invariants.md`
       is updated in this pull request, and says how the new rule is enforced
