@@ -47,11 +47,13 @@ self-hoster has run it.
 - **Flag** `UPDATE` or `DELETE` on `audit_events` granted to `fukulow_app`.
 - **Flag** any grant that confers `UPDATE` on a whole table — whatever it is spelled
   as: `GRANT UPDATE ON`, `GRANT SELECT, UPDATE ON`, `GRANT ALL [PRIVILEGES] ON`, or
-  `ON ALL TABLES IN SCHEMA`. A table-level grant lets a departed person's actor, or
+  `GRANT UPDATE` / `GRANT ALL` `ON ALL TABLES IN SCHEMA` (a schema-wide `SELECT` is
+  not this). A table-level grant lets a departed person's actor, or
   a bot's, be rewritten as another type.
-- **Flag** an `UPDATE` grant on a column that the pull request does not name as
-  updatable, with a reason. **Do not reason about whether the column looks safe:**
-  the list decides. Columns that say what a row is or where it belongs — ids,
+- **Flag** an `UPDATE` grant on a column that **the issue the pull request closes**
+  does not name as updatable, with a reason. A pull request cannot add to that list
+  on its own — the issue changes first. **Do not reason about whether the column
+  looks safe:** the list decides. Columns that say what a row is or where it belongs — ids,
   `organization_id`, `actor_id`, parent and target keys (`team_id`, `channel_id`,
   `target_*`), `type`, `kind`, `token_hash` — would move a row to another owner or
   parent without changing its id.
@@ -61,8 +63,9 @@ self-hoster has run it.
 
 ## Columns
 
-- **Flag** a column that is not `NOT NULL` when the pull request does not name it as
-  nullable and say why. A `CHECK` passes on NULL, a `UNIQUE` admits many NULLs unless
+- **Flag** a column that is not `NOT NULL` when **the issue the pull request closes**
+  does not name it as nullable and say why. A pull request cannot add an exception on
+  its own — the issue changes first. A `CHECK` passes on NULL, a `UNIQUE` admits many NULLs unless
   declared `NULLS NOT DISTINCT`, and a `DEFAULT` does not stop an explicit NULL.
 - **Flag** a column that stores a display name in any table other than `actors` or
   `organization_members`.
