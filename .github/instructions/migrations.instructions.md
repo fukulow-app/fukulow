@@ -30,9 +30,9 @@ self-hoster has run it.
   must not carry this constraint.
 - **Flag** a nullable column in a composite foreign key, other than
   `channels.team_id` and `invites.target_team_id`. A NULL in any column makes the
-  key unchecked, and a `CHECK` passes on NULL — the constraint silently turns off.
-  For those two, flag the absence of a comment saying the key is not checked when
-  the column is NULL.
+  key unchecked under the default `MATCH SIMPLE`, and a `CHECK` passes on NULL — the
+  constraint silently turns off. For those two, flag the absence of a comment saying
+  the key is not checked when the column is NULL.
 - **Flag** an actor reference — `sender_actor_id`, `actor_id`,
   `created_by_actor_id` — that is not `NOT NULL`. A foreign key alone allows NULL.
 - **Flag** a new tenant-owned or cross-tenant table without both `ENABLE` and
@@ -47,10 +47,14 @@ self-hoster has run it.
 - **Flag** `UPDATE` or `DELETE` on `audit_events` granted to `fukulow_app`.
 - **Flag** any grant that confers `UPDATE` on a whole table — whatever it is spelled
   as: `GRANT UPDATE ON`, `GRANT SELECT, UPDATE ON`, `GRANT ALL [PRIVILEGES] ON`, or
-  `ON ALL TABLES IN SCHEMA`. `UPDATE` is granted with a column list, on
-  named columns only, and never on an `id`, `organization_id`, `actor_id`,
-  `actors.type`, `invites.kind` or `token_hash`: a table-level grant lets a departed
-  person's actor, or a bot's, be rewritten as another type.
+  `ON ALL TABLES IN SCHEMA`. A table-level grant lets a departed person's actor, or
+  a bot's, be rewritten as another type.
+- **Flag** an `UPDATE` grant on a column that the pull request does not name as
+  updatable, with a reason. **Do not reason about whether the column looks safe:**
+  the list decides. Columns that say what a row is or where it belongs — ids,
+  `organization_id`, `actor_id`, parent and target keys (`team_id`, `channel_id`,
+  `target_*`), `type`, `kind`, `token_hash` — would move a row to another owner or
+  parent without changing its id.
 - **Flag** `DELETE` on `actors` or `organization_members` granted to `fukulow_app`.
   Those rows are never deleted. (`DELETE` on `users` is expected: a person's `users`
   row is deleted when they leave the service.)
@@ -58,8 +62,8 @@ self-hoster has run it.
 ## Columns
 
 - **Flag** a column that is not `NOT NULL` when the pull request does not name it as
-  nullable and say why. A `CHECK` passes on NULL, a `UNIQUE` admits many NULLs, and
-  a `DEFAULT` does not stop an explicit NULL.
+  nullable and say why. A `CHECK` passes on NULL, a `UNIQUE` admits many NULLs unless
+  declared `NULLS NOT DISTINCT`, and a `DEFAULT` does not stop an explicit NULL.
 - **Flag** a column that stores a display name in any table other than `actors` or
   `organization_members`.
 - **Flag** a foreign key for membership, authorship or audit that references
