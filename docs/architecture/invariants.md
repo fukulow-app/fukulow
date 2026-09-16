@@ -49,7 +49,7 @@ the happy path says nothing about whether the guard exists.
 | A team membership row **may** be deleted | Nothing references it, and its removal is recorded in `audit_events` | #2 |
 | An active user has an email address | `CHECK (deleted_at IS NOT NULL OR email IS NOT NULL)` | #2 |
 | Active users' email addresses are unique, ignoring case | `UNIQUE INDEX ON users (lower(email)) WHERE deleted_at IS NULL`. Lookups must use `lower(email) = lower($1)` or the index is silently skipped | #2 |
-| **No table other than `users` and `organization_members` stores a display name** — those two hold the name; nothing holds a copy of it | A test reads `information_schema.columns` and fails on a name-like column anywhere else | #2 |
+| **Display names have exactly two sources of truth: `users.display_name` and `organization_members.display_name`.** No other column, and no structured metadata, persists a copy | **Columns:** a test reads `information_schema.columns` and fails on a name-like column anywhere else. **Structured metadata (`jsonb`):** the schema test cannot see inside it, so it is held by construction instead — metadata is built by typed functions whose parameters are ids and enumerations, never free text — and by review | #2 |
 | Leaving the service erases every personal-data column and keeps `users.id` | The personal-data columns are listed in one place in code; a test checks each column individually | #2 |
 | **Every organization keeps at least one active owner** | One place in `domain`, which first locks the organization row (see below) | #2 |
 
@@ -121,9 +121,13 @@ lock makes the two orders the same.
 | **Audit records are never changed or removed** | The application role holds no `UPDATE` or `DELETE` on `audit_events`. Tested **connected as that role** | #2 |
 | A change of state and its audit record commit together | The same transaction | #2 |
 | "The system did it" is not expressed as NULL | `actor_kind NOT NULL` **with no default**, and a `CHECK` tying `actor_kind = 'user'` to a non-null `actor_user_id` | #2 |
-| Audit metadata never holds a secret | Metadata is built by a typed function per action; callers cannot pass arbitrary JSON | #2 |
+| **Audit metadata never holds a secret or personal data** — no token, password, email address or name | Metadata is built by a typed function per action whose parameters are ids and enumerations; callers cannot pass arbitrary JSON or free text. **This is not only tidiness: audit records can never be updated or deleted, so personal data written there could never be erased when someone leaves the service** | #2 |
 
 A wrong audit record is corrected by adding another, not by rewriting the first.
+
+**A change of name is audited by who changed whose name, and when — not by the old
+and new values.** Recording the values would put a display-name snapshot into the
+one table that can never be erased.
 
 ## Privileges and row security
 
