@@ -12,11 +12,11 @@ If a label seems wrong, change the label.
 
 | Identifier | Meaning | Label (ja) |
 |---|---|---|
-| `organization` | A company or other body. **The tenant**: every piece of data belongs to exactly one, except people | 組織 |
+| `organization` | A company or other body. **The tenant**: every piece of tenant-owned data belongs to exactly one. Actors — people, bots, integrations — and their `users` and `sessions` are global and belong to none | 組織 |
 | `team` | A grouping inside an organization — a store, a department, a project. **Describes where someone belongs, not who receives what** | チーム |
 | `channel` | A place where a conversation happens. Owned by a team or directly by the organization | ルーム |
 | `direct` | A one-to-one or small-group conversation | ダイレクト |
-| `member` | A person's membership of an organization, a team or a channel | メンバー |
+| `member` | An actor's membership of an organization, a team or a channel — a person's, or a bot's or integration's | メンバー |
 
 **Not used anywhere**, in identifiers or labels: `workspace`, `server`, `guild`.
 `server` collides with the machine; `workspace` means nothing to most people who
@@ -27,12 +27,12 @@ will use this.
 | Term | Meaning |
 |---|---|
 | **actor** | **Whoever performs an operation** — type `human`, `bot`, `integration` or `system`. **Global**: an actor belongs to no organization, and one actor can belong to several. Memberships, authorship and audit all reference the actor. Never deleted |
-| **user** | **A person's details** — email address and password — belonging to one human actor. Only a person has one, and only a person can hold a login session. Deleted when the person leaves the service; the actor stays |
+| **user** | **A person's details** — the personal data (email address, password) of one human actor, keyed by the actor. Only a person has one, and only a person can hold a login session. Deleted when the person leaves the service; the actor stays |
 | **entry point** | REST, webhook or WebSocket: a way in, not an actor. Every credential resolves to an actor |
 | **organization member** | An actor's membership of one organization. Carries the role, the status and an optional display name for that organization |
 | **status** | `active`, `suspended` or `left`. **A security rule, not a label** — row security only admits `active` members |
 | **display name** | Always the current one. Held in exactly two places: `actors.display_name`, and an optional per-organization override in `organization_members`. Past messages show the name as it is now |
-| **leaving the service** | The person's `users` row is deleted, their display names are cleared, and the actor stays with `deleted_at` set — so past messages keep their author |
+| **leaving the service** | Every membership of the actor becomes `left`, the person's `users` row and sessions are deleted, their display names are cleared, and the actor stays with `deleted_at` set — so past messages keep their author. Refused for the last active owner of an organization |
 
 ## Channels
 

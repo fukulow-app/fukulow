@@ -36,12 +36,12 @@ say which item. Do not comment when it does not.
   `UPDATE` or `DELETE` — that is not scoped by `organization_id`. An `INSERT`
   that does not set it, or an `UPDATE`/`DELETE` that does not filter by it, is as
   much a violation as a `SELECT`.
-  `channel_members` (cross-tenant), `actors` and `users` (global) have no such
-  column and are reached through a channel or a membership; do not flag those for
+  `channel_members` (cross-tenant), `actors`, `users` and `sessions` (global) have no
+  such column and are reached through a channel or a membership; do not flag those for
   its absence.
 - **Flag** authorship, membership or an audit record that references `users` rather
-  than `actors`. Every operation is performed by an actor; `users` holds only a
-  person's email address and password.
+  than `actors`. Every operation is performed by an actor; `users` holds a person's
+  personal data (email address, password) keyed by their actor.
 - **Flag** application SQL outside the `db` crate. SQL under `migrations/` is not
   flagged.
 

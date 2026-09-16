@@ -78,8 +78,8 @@ industry — only that mapping changes.**
 
 - **Allow only.** There is no explicit deny. Deciding whether a team-level allow
   beats a channel-level deny is a problem to take on when it is needed, not before
-- **No permissions granted directly to individuals.** A person gets a role; a role
-  has capabilities
+- **No permissions granted directly to individuals.** An actor gets a role; a role
+  has capabilities — for a person, a bot and an integration alike
 - **Ask about an `actor`.** Capabilities belong to whoever acts, person or not;
   a token's scopes can narrow them without a second model
 

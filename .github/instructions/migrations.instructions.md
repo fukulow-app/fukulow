@@ -51,7 +51,8 @@ self-hoster has run it.
 - **Flag** a foreign key for membership, authorship or audit that references
   `users` instead of `actors`, and an `organization_id` on `actors` — actors are
   global.
-- **Flag** a default on `invites.kind`, `channels.scope` or
-  `actors.type`. A default would guess their meaning.
+- **Flag** a default on `invites.kind`, `channels.scope`, `actors.type` or
+  `audit_events.actor_id`. A default would guess their meaning — and a default
+  actor would attribute an audit record to someone who did not do it.
 - **Flag** an email column indexed or looked up without `lower(email COLLATE "C")`.
   Without the collation, case folding depends on the server's locale.
