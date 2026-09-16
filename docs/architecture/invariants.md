@@ -28,6 +28,13 @@ the happy path says nothing about whether the guard exists.
 | **Every timestamp is `timestamptz`**, stored in UTC | Column type; a test fails on any `timestamp` column. A `timestamp` column is a full migration to fix | #2, #11 |
 | **Every migration can be reverted** | A matching `.down.sql`; CI runs up, down and up again | #2 |
 
+## Columns
+
+| Invariant | Enforced by | Lands in |
+|---|---|---|
+| **Every column is `NOT NULL` unless it is named nullable, with a reason** | NULL gets past every other constraint on a column: **a `CHECK` passes on NULL, a `UNIQUE` admits any number of NULLs (unless declared `NULLS NOT DISTINCT`), a foreign key with the default `MATCH SIMPLE` requires no match when a referencing column is NULL, and a `DEFAULT` applies only when the column is omitted** — an explicit NULL is stored. So `NOT NULL` is the rule and nullability is the exception: the issue that adds a nullable column names it and says why, and **a schema test holds that list and fails on any other nullable column** | #2, #11 |
+| **A row's identity, owner and parent never change** — no row moves to another organization, actor, parent or target, or changes its kind | **`UPDATE` is granted only on the columns the issue that adds them names as updatable, with a reason — never on a table.** Every other column stays read-only, so the rule covers columns nobody thought of: ids, `organization_id`, `actor_id`, parent and target keys such as `team_id`, `channel_id` and `target_team_id`, `actors.type`, `invites.kind`, `token_hash`. **A row in another place is a new row.** The exact-privileges test holds the list | #2, #11 |
+
 ## Tenancy
 
 | Invariant | Enforced by | Lands in |
@@ -38,7 +45,7 @@ the happy path says nothing about whether the guard exists.
 | **A channel member need not be a member of the channel's organization** | The absence of the constraint above on `channel_members` — deliberate, and tested in the allowed direction | #11 |
 | **An invite cannot point at anything outside its own organization** | One target column per kind, each with a composite foreign key through the invite's `organization_id`, and a `CHECK` that the right one is filled | #2 |
 | A channel is owned by exactly one of a team or its organization | `CHECK ((scope = 'organization' AND team_id IS NULL) OR (scope = 'team' AND team_id IS NOT NULL))`; `scope` has no default | #11 |
-| **Every column of a composite foreign key is `NOT NULL`**, except where NULL is the documented intent | A NULL in any column makes PostgreSQL skip the key, and a `CHECK` passes on NULL — so a nullable column silently turns the constraint off. **The only deliberate exceptions are `channels.team_id` (an organization-scoped channel) and `invites.target_team_id` (whose presence a `CHECK` on the non-null `kind` requires).** A schema test lists every composite foreign key column and fails on a nullable one outside those two | #2, #11 |
+| **Every column of a composite foreign key is `NOT NULL`**, except where NULL is the documented intent | Under the default `MATCH SIMPLE`, a NULL in any column means no match is required, and a `CHECK` passes on NULL — so a nullable column silently turns the constraint off. **The only deliberate exceptions are `channels.team_id` (an organization-scoped channel) and `invites.target_team_id` (whose presence a `CHECK` on the non-null `kind` requires).** A schema test lists every composite foreign key column and fails on a nullable one outside those two | #2, #11 |
 | The composite foreign key from `channels` to `teams` is **not** checked when `team_id` is NULL | Default behaviour of a composite key; asserted by a test and stated in a schema comment, because it looks enforced | #11 |
 
 ## Identity
@@ -48,7 +55,8 @@ the happy path says nothing about whether the guard exists.
 | **Every operation is performed by an actor**, and authorship, membership and audit reference `actors` — never `users` | Foreign keys to `actors (id)`. **A foreign key does not forbid NULL, so every one of these is also `NOT NULL`**: `messages.sender_actor_id`, `audit_events.actor_id`, `invites.created_by_actor_id`, and `sessions.actor_id` (to `users`). In `organization_members`, `team_members` and `channel_members`, `actor_id` is part of the primary key, which makes it `NOT NULL` | #2, #11 |
 | **Actors are global**: an actor belongs to no organization, and one actor may belong to several | `actors` has no `organization_id`; belonging is recorded only in membership tables | #2 |
 | An actor row is never deleted | The application role holds no `DELETE` on `actors`. History references it | #2 |
-| **Only a human actor has a `users` row** | `actors` has `UNIQUE (id, type)`; `users` carries **`actor_type NOT NULL`**, fixed by `CHECK (actor_type = 'human')`, and references `actors (id, type)` through `(actor_id, actor_type)`. **`NOT NULL` is what makes this hold:** measured on PostgreSQL 17, without it a bot's id with `actor_type = NULL` is accepted — the `CHECK` treats NULL as passing and the composite key skips a row with a NULL column. A test inserts exactly that and expects refusal | #2 |
+| **An actor's type never changes** | `fukulow_app` holds `UPDATE` on `actors` for `display_name` and `deleted_at` only. **The composite key below protects `type` only while a `users` row exists.** Measured on PostgreSQL 17 with table-level `UPDATE`: once a person has left, their actor can be rewritten as `system`; and **a bot can be rewritten as `human` and then given a `users` row — and with it a login session**. With the column grant both fail with `permission denied`. Tested connected as `fukulow_app`, including after leaving | #2 |
+| **Only a human actor has a `users` row** | `actors` has `UNIQUE (id, type)`; `users` carries **`actor_type NOT NULL`**, fixed by `CHECK (actor_type = 'human')`, and references `actors (id, type)` through `(actor_id, actor_type)`. **`NOT NULL` is what makes this hold:** measured on PostgreSQL 17, without it a bot's id with `actor_type = NULL` is accepted — the `CHECK` treats NULL as passing and the composite key, under the default `MATCH SIMPLE`, requires no match for a row with a NULL column. A test inserts exactly that and expects refusal | #2 |
 | Only a person can hold a login session | `sessions` references `users (actor_id)` — which, by the row above, only a human actor has | #2 |
 | An organization membership row is never deleted — only its `status` changes | The application role holds no `DELETE` on `organization_members` | #2 |
 | A team membership row **may** be deleted | Nothing references it, and its removal is recorded in `audit_events` | #2 |
@@ -92,7 +100,8 @@ cannot exercise the interleaving that breaks this.
 | Every invite has a kind, and there is no default | `NOT NULL`, no `DEFAULT` | #2 |
 | Every invite expires | `expires_at NOT NULL` | #2 |
 | A token is never stored | Only `token_hash` exists | #2 |
-| **An invite is never used more times than allowed** | One conditional statement decides and increments together; `CHECK (used_count <= max_uses)` as a backstop | #2, #3 |
+| A token hash identifies at most one invite, and at most one session | `UNIQUE` on `invites.token_hash` and `sessions.token_hash` — the index a lookup by token uses | #2 |
+| **An invite is never used more times than allowed** | One conditional statement decides and increments together; `CHECK (used_count <= max_uses)`, `CHECK (used_count >= 0)` and `CHECK (max_uses > 0)` as a backstop | #2, #3 |
 
 ```sql
 UPDATE invites
@@ -144,7 +153,7 @@ one table that can never be erased.
 |---|---|---|
 | **The application does not own its tables** | Separate `fukulow_migrator` and `fukulow_app` roles. An owner bypasses row security | #2 |
 | **The application role cannot bypass row security** | `fukulow_app` is not the table owner, not a superuser, and has no `BYPASSRLS`. No role is ever created with `BYPASSRLS`. **A superuser always bypasses row security**, and an owner does unless `FORCE` is set — which is why the application connects as neither | #2 |
-| The application holds exactly the privileges it needs, and no more | Granted table by table; **no `ALTER DEFAULT PRIVILEGES`**. A test compares actual privileges against the expected set | #2 |
+| The application holds exactly the privileges it needs, and no more | Granted table by table, and `UPDATE` column by column; **no `ALTER DEFAULT PRIVILEGES`**. A test compares actual privileges **on every table and every column** against the expected set. **Checking tables alone misses a column grant:** `has_table_privilege(..., 'UPDATE')` is false for a role holding `UPDATE` on one column | #2 |
 | Every tenant-owned and cross-tenant table has row security enabled and forced | `ENABLE` and `FORCE ROW LEVEL SECURITY`. A test fails on any such table **that lacks a policy, or has row security not enabled, or not forced** (`pg_class.relrowsecurity`, `relforcerowsecurity`). A policy on a table without `ENABLE` does nothing | #10 |
 | **A query with no identity set sees no row of any tenant-owned or cross-tenant table** | Policies derive visibility from `fukulow.actor_id`; unset means no rows, not all rows. **Global tables — `actors`, `users`, `sessions` — are not covered**: they belong to no organization, and how they are protected is decided in #10 | #10 |
 | **Identity never leaks between requests** | `SET LOCAL` inside the transaction, never `SET`. Tested with two transactions on one pooled connection | #10 |
