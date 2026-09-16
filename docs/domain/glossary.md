@@ -67,7 +67,7 @@ Every table is in exactly one class, and a new table says which.
 
 | Class | Meaning | Row security |
 |---|---|---|
-| **tenant-owned** | Belongs to one organization; carries `organization_id` | Policy derived from membership |
+| **tenant-owned** | Belongs to one organization; carries `organization_id`. **`organizations` is the root: it is the tenant, and its own `id` is the value others carry** | Policy derived from membership |
 | **cross-tenant** | Links an organization's resource to users who may be outside it | Policy, not a simple comparison |
 | **global** | Belongs to no organization | Cannot be scoped by organization |
 | **internal** | Bookkeeping, such as the migration table | None; the application has no access |

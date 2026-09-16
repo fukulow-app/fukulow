@@ -32,7 +32,7 @@ the happy path says nothing about whether the guard exists.
 
 | Invariant | Enforced by | Lands in |
 |---|---|---|
-| Every tenant-owned row carries the `organization_id` of the organization it belongs to | `NOT NULL` | #2, #11 |
+| Every tenant-owned row carries the `organization_id` of the organization it belongs to — **except `organizations` itself, the tenant root, whose own `id` is that value** | `NOT NULL` | #2, #11 |
 | **A child row's `organization_id` agrees with its parent's** | Composite foreign key `(parent_id, organization_id) → parent (id, organization_id)` | #2, #11 |
 | **A team member is a member of that team's organization** | Composite foreign keys from `team_members` to both `teams` and `organization_members` | #2 |
 | **A channel member need not be a member of the channel's organization** | The absence of the constraint above on `channel_members` — deliberate, and tested in the allowed direction | #11 |
@@ -49,7 +49,7 @@ the happy path says nothing about whether the guard exists.
 | A team membership row **may** be deleted | Nothing references it, and its removal is recorded in `audit_events` | #2 |
 | An active user has an email address | `CHECK (deleted_at IS NOT NULL OR email IS NOT NULL)` | #2 |
 | Active users' email addresses are unique, ignoring case | `UNIQUE INDEX ON users (lower(email)) WHERE deleted_at IS NULL`. Lookups must use `lower(email) = lower($1)` or the index is silently skipped | #2 |
-| **No table stores a copy of a display name** | A test reads `information_schema.columns` and fails on an unexpected name-like column | #2 |
+| **No table other than `users` and `organization_members` stores a display name** — those two hold the name; nothing holds a copy of it | A test reads `information_schema.columns` and fails on a name-like column anywhere else | #2 |
 | Leaving the service erases every personal-data column and keeps `users.id` | The personal-data columns are listed in one place in code; a test checks each column individually | #2 |
 | **Every organization keeps at least one active owner** | One place in `domain`, which first locks the organization row (see below) | #2 |
 
@@ -103,7 +103,7 @@ people both see "one use left".** Tested by accepting an invite with
 
 | Invariant | Enforced by | Lands in |
 |---|---|---|
-| Within a channel, `channel_seq` has no gap and no duplicate | The number is taken with `UPDATE channels SET next_message_seq = next_message_seq + 1 ... RETURNING`, which locks the channel row; plus `UNIQUE (channel_id, channel_seq)` | #11 |
+| Within a channel, `channel_seq` has no gap and no duplicate | The number is taken with `UPDATE channels SET next_message_seq = next_message_seq + 1 ... RETURNING`, which locks the channel row, **and the message is inserted in the same transaction** — if the insert fails, the increment rolls back with it. Plus `UNIQUE (channel_id, channel_seq)`. A test forces an insert to fail and shows the next message receives the number the failed one would have had | #11 |
 | **Ordering and cursors use `channel_seq`, never a message id** | Contract | #11, #6 |
 | A repeated client-generated message id does not create a second message | `PRIMARY KEY (id)` | #11 |
 
@@ -120,7 +120,7 @@ lock makes the two orders the same.
 |---|---|---|
 | **Audit records are never changed or removed** | The application role holds no `UPDATE` or `DELETE` on `audit_events`. Tested **connected as that role** | #2 |
 | A change of state and its audit record commit together | The same transaction | #2 |
-| "The system did it" is not expressed as NULL | `actor_kind NOT NULL`, with a `CHECK` tying `actor_kind = 'user'` to a non-null `actor_user_id` | #2 |
+| "The system did it" is not expressed as NULL | `actor_kind NOT NULL` **with no default**, and a `CHECK` tying `actor_kind = 'user'` to a non-null `actor_user_id` | #2 |
 | Audit metadata never holds a secret | Metadata is built by a typed function per action; callers cannot pass arbitrary JSON | #2 |
 
 A wrong audit record is corrected by adding another, not by rewriting the first.
@@ -130,12 +130,13 @@ A wrong audit record is corrected by adding another, not by rewriting the first.
 | Invariant | Enforced by | Lands in |
 |---|---|---|
 | **The application does not own its tables** | Separate `fukulow_migrator` and `fukulow_app` roles. An owner bypasses row security | #2 |
-| **No role can bypass row security** | No role is created with `BYPASSRLS` — not now, not later | #2 |
+| **The application role cannot bypass row security** | `fukulow_app` is not the table owner, not a superuser, and has no `BYPASSRLS`. No role is ever created with `BYPASSRLS`. **A superuser always bypasses row security**, and an owner does unless `FORCE` is set — which is why the application connects as neither | #2 |
 | The application holds exactly the privileges it needs, and no more | Granted table by table; **no `ALTER DEFAULT PRIVILEGES`**. A test compares actual privileges against the expected set | #2 |
 | Every tenant-owned and cross-tenant table has row security enabled and forced | `ENABLE` and `FORCE ROW LEVEL SECURITY`; a test fails on any such table without a policy | #10 |
 | **A query with no identity set sees nothing** | Policies derive visibility from `fukulow.user_id`; unset means no rows, not all rows | #10 |
 | **Identity never leaks between requests** | `SET LOCAL` inside the transaction, never `SET`. Tested with two transactions on one pooled connection | #10 |
-| Row security is a last wall, not the only one | Repository code still filters by `organization_id` | #10 |
+| Row security is a last wall, not the only one | Repository code still filters tenant-owned data by `organization_id` | #10 |
+| **Row security admits only active members of the organization — not yet members from outside it** | Policies derived from `organization_members` alone. A user from another organization can be stored as a channel member, and row security returns none of that channel's rows to them. **A test asserts this**, so extending it is a conscious change. The policies are extended when connections between organizations are built — a policy change, not a data migration | #10 |
 
 **Why no `ALTER DEFAULT PRIVILEGES`.** It would hand the application `UPDATE` and
 `DELETE` on every new table, including `audit_events`, and depend on someone
@@ -152,7 +153,7 @@ one organization's context at a time.
 
 | Invariant | Enforced by | Lands in |
 |---|---|---|
-| No `unsafe` | `unsafe_code = "forbid"` in `[workspace.lints]`, inherited by every crate. **Not** repeated as `#![forbid]` in files — that would make it impossible to tell which one is doing the work | in place |
+| No `unsafe` | `unsafe_code = "forbid"` in `[workspace.lints.rust]` in the root `Cargo.toml`, inherited by each member through `[lints] workspace = true`. **Not** repeated as `#![forbid]` in files — that would make it impossible to tell which one is doing the work | in place |
 | No `unwrap()`, `expect()` or `panic!` on a request path | Review. `expect` only where failing to start is correct, naming what is missing and never a value | in place |
 | **Logs never contain a message body, token, password, email address or invite link** | Review, and tests on failure paths | in place |
 | **Authorization asks for a capability, never a role name** | `can(actor, Capability::...)` in `domain`; `if role == ...` is refused in review | #5 |

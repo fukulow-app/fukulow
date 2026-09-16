@@ -9,9 +9,10 @@ are written in.
 
 ## The tenant is the organization
 
-Every piece of data belongs to exactly one organization, **except users**, who are
-global: one person can belong to several organizations and keeps the same
-identity across them.
+Every tenant-owned piece of data belongs to exactly one organization.
+**`organizations` is the root** — each row is a tenant. **Users are global**: one
+person can belong to several organizations and keeps the same identity across
+them. Bookkeeping, such as the migration table, belongs to no organization.
 
 **One organization's data is never visible to another** — with one deliberate,
 explicit exception: channel members from outside the organization (below).
@@ -66,7 +67,12 @@ industry — only that mapping changes.**
 ## Two access primitives
 
 There are exactly two ways to ask whether someone may see something. **Every
-route uses one of them, and says which.**
+route that reads or changes a protected resource uses at least one of them, and
+says which.** Some use both — listing an organization's channels checks
+organization membership, then channel access per channel.
+
+Operational routes such as `/health` touch no protected resource and are outside
+this model.
 
 | Primitive | Decides access to |
 |---|---|
@@ -77,7 +83,7 @@ route uses one of them, and says which.**
 
 | Scope | Allowed when |
 |---|---|
-| `team` | The actor is a member of **the channel**. Organization membership is **not** a condition — outside members are allowed |
+| `team` | The actor is a member of **the channel**. Organization membership is **not** a condition — outside members are allowed by the model (see the row-security note below) |
 | `organization` | The actor is an **active member of the organization**. Nobody is listed individually |
 
 **Callers never choose the branch.** The branch is inside the function.
@@ -103,17 +109,28 @@ there.
 
 ## Row security is the last wall, not the first
 
-Every query in repository code filters by organization explicitly. PostgreSQL row
-level security sits underneath as the wall that holds when something reaches the
-tables another way.
+Every query in repository code that reads tenant-owned data filters by
+organization explicitly. Cross-tenant links (`channel_members`) are reached
+through the channel they belong to, and global rows (`users`) through a
+membership. PostgreSQL row level security sits underneath as the wall that holds
+when something reaches the tables another way.
 
 - The application sets **only** the acting user's id, per transaction, with
   `SET LOCAL`. **Which organizations that user may see is derived by the database**
-  from their memberships. Letting the application declare the organization would
-  trust it exactly as much as the `WHERE` clause already does
+  from their organization memberships. Letting the application declare the
+  organization would trust it exactly as much as the `WHERE` clause already does
 - **With no user set, no rows are visible.** Forgetting to set it produces an empty
   result, not another organization's data
-- No role can bypass row security, and the application does not own its tables
+- The application role cannot bypass row security: it does not own the tables,
+  is not a superuser, and has no `BYPASSRLS`. A superuser always bypasses policies,
+  and an owner does unless `FORCE` is set — so the application connects as neither
+
+**Members from outside the organization cannot read through row security yet.**
+The model admits them to team channels; the policies are derived from organization
+membership alone, so today they get no rows. That is deliberate while connections
+between organizations do not exist: **the gap fails closed** — an empty result,
+never exposure — and a test pins it so that extending it is a conscious change.
+The policies are extended when connections are built.
 - **Nothing runs without an identity.** A job that needs one runs in one
   organization's context at a time
 

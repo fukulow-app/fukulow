@@ -13,8 +13,8 @@ How the code is divided, and which way the divisions may depend on each other.
 | `realtime` | Subscriptions and fan-out | Expose a `tokio` channel type, or its lag error, in its public API |
 | `app` | The binary: wiring, configuration, shutdown | — |
 
-Each crate's `//!` documentation says the same, so the boundary is visible from
-the code as well.
+Each library crate's `//!` documentation says the same, so the boundary is
+visible from the code as well. `app` is the binary and has none.
 
 ## Dependency direction
 
@@ -34,9 +34,13 @@ graph TD
 
 `protocol` and `domain` depend on nothing in this workspace.
 
-**The direction is declared in the manifests, and that is what enforces it.** A
-dependency the wrong way round forms a cycle, which cargo rejects before review
-has to notice.
+**The direction is declared in the manifests, and cargo enforces only part of
+it.** Cargo rejects a cycle, so *reversing an existing edge* fails to build —
+`domain` depending on `db`, for example, because `db` already depends on `domain`.
+
+**Cargo does not reject a new edge that forms no cycle.** `domain` depending on
+`protocol` builds without complaint, and is still forbidden. Those are caught in
+review until a test checks the dependency graph against this one (#21).
 
 ## Where types are documented
 
