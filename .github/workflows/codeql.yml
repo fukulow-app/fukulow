@@ -1,0 +1,52 @@
+# Static analysis for vulnerabilities, in the Rust code and in these workflows.
+#
+# The analyze jobs succeed whether or not they find anything: they upload results.
+# What turns red on a finding is the separate "CodeQL" check that code scanning
+# adds to a pull request when it introduces a new alert. That is the check to
+# require -- requiring the analyze jobs would require nothing about findings.
+#
+# Not a required check yet. A first run can report a baseline of findings that
+# have nothing to do with the pull request in front of it; it becomes required
+# once it is green on main, so that red means something this change introduced.
+name: codeql
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # New queries ship with CodeQL releases. Code that has not changed can still
+  # gain a finding.
+  schedule:
+    - cron: "0 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload results to code scanning; this job only
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, actions]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: ${{ matrix.language }}
+          # Rust is analysed without compiling it; a build here would duplicate the
+          # build workflow and tie this job's failures to compile errors.
+          build-mode: none
+      - uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          category: /language:${{ matrix.language }}

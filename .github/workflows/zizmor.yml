@@ -1,0 +1,36 @@
+# Static analysis of the workflows themselves: unpinned actions, broad
+# permissions, credentials left on disk, template injection.
+#
+# Run against main before this workflow existed, it reported 7 unpinned actions,
+# 3 checkouts that kept credentials on disk, and a workflow running with default
+# permissions -- the last of which had already been found and fixed by hand.
+name: zizmor
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          # The action defaults to "latest". Pinning the actions and not the tool
+          # that checks the pins would leave the check itself unpinned.
+          version: 1.30.1
+          # With advanced security on, findings are uploaded and the job still
+          # passes. This job's failure is meant to mean "a workflow is risky".
+          advanced-security: false
+          annotations: true

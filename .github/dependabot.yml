@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # A release is not adopted on the day it is published. A compromised version
+    # is usually found and yanked within days; waiting costs little.
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      # Majors stay out of the group, so each arrives as its own pull request. A
+      # breaking checkout or toolchain change bundled with routine bumps would make
+      # a failure impossible to attribute.
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

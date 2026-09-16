@@ -3,6 +3,14 @@
 #
 # It verifies the commits a pull request adds, not the branch tip: a branch can
 # be signed off at the tip and carry unsigned commits underneath.
+#
+# Dependabot's commits carry no sign-off. They are skipped only when the pull
+# request was opened by Dependabot AND the commit's author name and email are both
+# Dependabot's. The pull request's author cannot be forged, so nobody outside the
+# repository can use this. The commit's author can: only people with write access
+# can push to a Dependabot branch, and one of them could write Dependabot's name
+# and email into their own commit. This exemption therefore trusts maintainers --
+# which the DCO check does not protect against in any case.
 name: dco
 
 on:
@@ -14,24 +22,38 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   signed-off-by:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # The merge-base is needed to list the commits this PR adds.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Every commit in this pull request is signed off
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -euo pipefail
+          dependabot_name='dependabot[bot]'
+          dependabot_email='49699333+dependabot[bot]@users.noreply.github.com'
           missing=0
           for sha in $(git rev-list "$BASE..$HEAD"); do
             author="$(git show -s --format='%an <%ae>' "$sha")"
+            if [ "$PR_AUTHOR" = "$dependabot_name" ] \
+               && [ "$(git show -s --format='%an' "$sha")" = "$dependabot_name" ] \
+               && [ "$(git show -s --format='%ae' "$sha")" = "$dependabot_email" ]; then
+              echo "$sha by Dependabot, in a pull request Dependabot opened: skipped"
+              continue
+            fi
             if ! git show -s --format='%B' "$sha" \
                  | grep -qiE "^Signed-off-by: .+ <.+@.+>$"; then
               echo "::error::$sha by $author has no Signed-off-by line"
