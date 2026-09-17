@@ -49,7 +49,7 @@ async fn actor_and_invite_contexts_do_not_survive_commit_or_rollback() -> Result
 mod support;
 
 #[tokio::test]
-async fn invite_context_creates_person_and_only_the_invited_membership() -> Result {
+async fn invite_context_creates_a_person_but_admits_no_membership_yet() -> Result {
     let db = support::Database::new().await?;
     let a = support::Conversation::new(&db).await?;
     let b = support::Conversation::new(&db).await?;
@@ -87,68 +87,24 @@ async fn invite_context_creates_person_and_only_the_invited_membership() -> Resu
         "42501",
     );
     attempt.rollback().await?;
-    sqlx::query("INSERT INTO organization_members (organization_id, actor_id) VALUES ($1, $2)")
-        .bind(a.organization.0)
-        .bind(actor.0)
-        .execute(&mut *tx)
-        .await?;
-    assert_eq!(
-        sqlx::query_scalar::<_, Uuid>("SELECT id FROM organizations")
-            .fetch_all(&mut *tx)
-            .await?,
-        [a.organization.0]
-    );
-    tx.commit().await?;
-    assert_eq!(
-        sqlx::query_scalar::<_, String>(
-            "SELECT role FROM organization_members WHERE organization_id = $1 AND actor_id = $2"
-        )
-        .bind(a.organization.0)
-        .bind(actor.0)
-        .fetch_one(&db.inspector)
-        .await?,
-        "member"
-    );
-    db.finish().await
-}
-
-#[tokio::test]
-async fn an_unusable_invite_admits_no_membership() -> Result {
-    let db = support::Database::new().await?;
-    let a = support::Conversation::new(&db).await?;
-    // The conditional UPDATE decides use; the policy is the wall if that step is skipped.
-    for (index, (kind, target_team, expires, revoked)) in [
-        ("organization", None, "-1 second", false),
-        ("organization", None, "1 day", true),
-        ("team", Some(a.team.0), "1 day", false),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let hash = TokenHash::from_hex(format!("{index:0>64}"))?;
-        sqlx::query("INSERT INTO invites (id, organization_id, kind, target_team_id, token_hash, expires_at, max_uses, revoked_at, created_by_actor_id) VALUES ($1, $2, $3, $4, $5, now() + $6::interval, 1, CASE WHEN $7 THEN now() END, $8)")
-            .bind(Uuid::now_v7()).bind(a.organization.0).bind(kind).bind(target_team)
-            .bind(hash.as_str()).bind(expires).bind(revoked).bind(a.owner.0)
-            .execute(&db.inspector).await?;
-        let mut tx = begin(&db.app, Context::InviteToken(hash)).await?;
-        let actor = crate::create_person(
-            &mut tx,
-            &format!("unusable{index}@example.invalid"),
-            support::PASSWORD_HASH,
-            "Fixture invitee",
-        )
-        .await?;
-        support::rejected(
-            sqlx::query(
-                "INSERT INTO organization_members (organization_id, actor_id) VALUES ($1, $2)",
-            )
+    // Even the invite's own organization is refused: #3 adds the invite branch together with a
+    // database-side tie to a successful use of the invite in the same transaction.
+    let mut attempt = tx.begin().await?;
+    support::rejected(
+        sqlx::query("INSERT INTO organization_members (organization_id, actor_id) VALUES ($1, $2)")
             .bind(a.organization.0)
             .bind(actor.0)
-            .execute(&mut *tx)
+            .execute(&mut *attempt)
             .await,
-            "42501",
-        );
-        tx.rollback().await?;
-    }
+        "42501",
+    );
+    attempt.rollback().await?;
+    tx.commit().await?;
+    let memberships: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM organization_members WHERE actor_id = $1")
+            .bind(actor.0)
+            .fetch_one(&db.inspector)
+            .await?;
+    assert_eq!(memberships, 0);
     db.finish().await
 }

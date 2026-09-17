@@ -134,7 +134,12 @@ scoped by its own `id`. Cross-tenant links (`channel_members`) are reached throu
 the channel they belong to. Global rows (`actors`, `users`, `sessions`) are
 **read in a tenant context** — whose name to show in this organization — through a
 membership; **identity lookups that have no tenant context**, such as signing in by
-email or an actor that has left every organization, do not need one. PostgreSQL row level security sits underneath as the wall that holds
+email or an actor that has left every organization, do not need one. **Leaving the
+service is the one service-wide exception**: it reads the acting actor's own
+organization memberships and channel listings by `actor_id` alone, because the
+organizations it belongs to are what that read discovers. Row security admits only the
+actor's own rows there, and every write that follows is scoped by the `organization_id`
+each row names. PostgreSQL row level security sits underneath as the wall that holds
 when something reaches the tables another way.
 
 - The application sets the acting actor's id, `fukulow.actor_id`, or the credential
@@ -146,7 +151,8 @@ when something reaches the tables another way.
   self and every actor with a membership, of any status, in the acting actor's active organizations; `users` admits self or the one ASCII-case-insensitive
   sign-in email match; `sessions` admits self or the one token-hash match.
   `invites` also admits the one presented invite hash. Invite acceptance creates
-  an actor and sets its id before inserting the user and invited membership
+  an actor and sets its id before inserting the user. No policy admits a membership
+  through an invite yet; it arrives with acceptance, tied to the invite's use
 - Inactive actors can reach their own organization, team and channel membership
   rows for departure, without seeing anyone else's rows. Audits and listing
   removals precede all status transitions. An outside actor leaving the service

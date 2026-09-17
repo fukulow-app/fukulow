@@ -24,7 +24,10 @@ wrong.
   `organizations` itself is the root and is scoped by its own `id`.
   `channel_members` (cross-tenant) is reached through its channel. `actors`, `users`
   and `sessions` are global: in a tenant context reach them through a membership;
-  signing in and other identity lookups need none. Never write application SQL outside the `db` crate —
+  signing in and other identity lookups need none. **One service-wide exception**:
+  leaving the service enumerates the acting actor's own organization memberships and
+  channel listings by `actor_id` alone, to discover which organizations it belongs to;
+  every write after that is scoped by the `organization_id` it found. Never write application SQL outside the `db` crate —
   migrations are the exception
 - **Never point authorship, membership or audit at `users`.** They reference
   `actors`. `users` holds a person's email address and password. **Display names are

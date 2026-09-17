@@ -38,7 +38,10 @@ say which item. Do not comment when it does not.
   much a violation as a `SELECT`.
   `channel_members` (cross-tenant), `actors`, `users` and `sessions` (global) have no
   such column and are reached through a channel or a membership; do not flag those for
-  its absence.
+  its absence. Do not flag `leave_service` reading the acting actor's own
+  `organization_members` and `channel_members` rows by `actor_id` alone: it is the one
+  service-wide exception in `AGENTS.md`, and its writes are scoped by the
+  `organization_id` those rows name.
 - **Flag** authorship, membership or an audit record that references `users` rather
   than `actors`. Every operation is performed by an actor; `users` holds a person's
   personal data (email address, password) keyed by their actor.

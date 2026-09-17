@@ -84,8 +84,15 @@ transactions — begins with:
 SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE;
 ```
 
-Leaving first locks its actor `FOR UPDATE`, then all its organizations in
-`ORDER BY id` order. Every membership addition or reactivation first locks the
+Leaving first locks its actor `FOR UPDATE`, then, in `ORDER BY id` order, **the
+organizations where it is an active member** — the only ones the owner rule can apply to;
+an inactive membership's organization is not visible to it under row security. **A role
+change on an inactive membership is still serialised with the departure**: the departure
+writes its audit record into that organization before changing the membership's status,
+and that insert's foreign key takes `FOR KEY SHARE` on the organization, which conflicts
+with `change_member_role`'s `FOR UPDATE`. The role change therefore reads the membership
+only after the departure commits, and finds it `left`. A concurrency test pins this, and
+fails if `change_member_role` stops locking the organization. Every membership addition or reactivation first locks the
 actor `FOR SHARE` and refuses a non-null `deleted_at`; the actor lock always
 precedes organization locks. Audit inserts also take a foreign-key lock on the
 performer's actor, so mutations lock that actor before the organization too;
@@ -171,7 +178,7 @@ one table that can never be erased.
 | **Identity never leaks between requests** | `set_config(..., true)` inside the transaction, never session-level `SET`: `fukulow.actor_id`, `fukulow.session_token_hash`, `fukulow.sign_in_email`, `fukulow.invite_token_hash`. One `db::begin` sets the context; source tests pin that boundary. Two transactions on one pooled connection prove actor and invite context disappear after commit and rollback | in place |
 | Row security is a last wall, not the only one | Repository code still filters tenant-owned data by `organization_id`; `organizations` uses its own `id`. Capabilities decide whether an operation is permitted; a visible row grants no capability | in place |
 | **Row security admits only active members to ordinary organization data — not yet members from outside it** | Membership-derived policies. Inactive actors can read and remove their own listings and record their own departure, but see nobody else's rows; their organization membership may only become `left` with no display name, and a trigger forbids changing its role. An outside actor's channel listing grants no message access and cannot be added through the application; **leaving the service still removes it and records `channel.member.removed` in the channel's organization**, admitted only while the actor's own listing names that channel and organization, and written before the listing is deleted. Tests pin this closed gap until connections are built (#43) | in place |
-| **Row-security settings carry what the request presented — an actor, a token hash, an email address — never an organization** | The four `db::Context` variants; public `db::TokenHash` accepts exactly 64 lowercase hexadecimal characters and never hashes. The invite transaction sets the newly created actor before its `users` insert and admits only a `member` membership in the invite's organization, while that invite is of kind `organization`, unrevoked and unexpired — the use count is decided by the conditional `UPDATE` in the same transaction | in place |
+| **Row-security settings carry what the request presented — an actor, a token hash, an email address — never an organization** | The four `db::Context` variants; public `db::TokenHash` accepts exactly 64 lowercase hexadecimal characters and never hashes. The invite transaction sets the newly created actor before its `users` insert. **No policy yet admits a membership through an invite**: #3 adds that branch together with a database-side tie to a successful use of the invite in the same transaction | in place |
 | **Exactly two `SECURITY DEFINER` functions read memberships unfiltered** | `fukulow_active_organizations()` and `fukulow_organization_has_members(uuid)`, owned by `fukulow_migrator`, with `search_path = pg_catalog, pg_temp`, schema-qualified tables and no `PUBLIC EXECUTE`. Only membership SELECT admits the owner under FORCE. `fukulow_active_organizations()` is `PARALLEL RESTRICTED` so `messages_select` keeps a parallel scan: its array InitPlan runs in the leader above Gather; other policies retain `IN (SELECT ...)`. Tests enumerate the exact functions and parallel labels, repeat the temporary-table attack, and assert the count plan's InitPlan and parallel scan | in place |
 | **A migration that touches tenant rows states how it handles row security; `FORCE` is never left off** | Data migrations bracket tenant reads and writes with `NO FORCE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY` in their own transaction, so failure rolls back the exemption. Migration review flags missing handling or restoration; the schema test rejects a table left without FORCE. No standing bypass | in place |
 

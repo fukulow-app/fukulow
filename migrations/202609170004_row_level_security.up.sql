@@ -51,13 +51,8 @@ CREATE POLICY organization_members_select ON organization_members FOR SELECT TO 
 CREATE POLICY organization_members_insert ON organization_members FOR INSERT TO fukulow_app
     WITH CHECK (organization_id IN (SELECT public.fukulow_active_organizations())
         OR (actor_id = nullif(current_setting('fukulow.actor_id', true), '')::uuid AND role = 'owner' AND status = 'active'
-            AND NOT public.fukulow_organization_has_members(organization_id))
-        OR (actor_id = nullif(current_setting('fukulow.actor_id', true), '')::uuid AND role = 'member' AND status = 'active'
-            AND EXISTS (SELECT 1 FROM public.invites i
-                        WHERE i.organization_id = organization_members.organization_id
-                          AND i.token_hash = current_setting('fukulow.invite_token_hash', true)
-                          -- Use count is decided by the conditional UPDATE earlier in the same transaction.
-                          AND i.kind = 'organization' AND i.revoked_at IS NULL AND i.expires_at > now())));
+            AND NOT public.fukulow_organization_has_members(organization_id)));
+-- No invite branch yet: #3 adds it together with a database-side tie to the invite's use.
 CREATE POLICY organization_members_update ON organization_members FOR UPDATE TO fukulow_app
     USING (organization_id IN (SELECT public.fukulow_active_organizations()) OR actor_id = nullif(current_setting('fukulow.actor_id', true), '')::uuid)
     WITH CHECK (organization_id IN (SELECT public.fukulow_active_organizations())
