@@ -2,6 +2,7 @@ mod support;
 use sqlx::Row;
 use std::collections::BTreeSet;
 use support::{Database, Result};
+use uuid::Uuid;
 
 const TABLES: &[&str] = &[
     "actors",
@@ -147,6 +148,95 @@ fn updatable(table: &str, column: &str) -> bool {
             | ("invites", "used_count" | "revoked_at")
             | ("sessions", "revoked_at")
     )
+}
+
+#[tokio::test]
+async fn a_foreign_key_to_deletable_rows_leads_an_index() -> Result {
+    let db = Database::new().await?;
+    let unindexed = unindexed_foreign_keys_to_deletable_rows(&db).await?;
+    assert!(unindexed.is_empty(), "{unindexed:?}");
+    db.finish().await
+}
+
+#[tokio::test]
+async fn partial_and_invalid_indexes_do_not_serve_a_foreign_key() -> Result {
+    let db = Database::new().await?;
+    let reported = vec![("sessions".to_owned(), "sessions_actor_id_fkey".to_owned())];
+    sqlx::query("DROP INDEX sessions_actor_id_idx")
+        .execute(&db.owner)
+        .await?;
+    assert_eq!(
+        unindexed_foreign_keys_to_deletable_rows(&db).await?,
+        reported
+    );
+    sqlx::query(
+        "CREATE INDEX sessions_actor_id_partial ON sessions (actor_id) WHERE revoked_at IS NULL",
+    )
+    .execute(&db.owner)
+    .await?;
+    assert_eq!(
+        unindexed_foreign_keys_to_deletable_rows(&db).await?,
+        reported
+    );
+    // A concurrent build that fails leaves its index behind, marked invalid.
+    let actor = db.person().await?;
+    for _ in 0..2 {
+        sqlx::query("INSERT INTO sessions (id, actor_id, token_hash, expires_at) VALUES ($1, $2, $3, now())")
+            .bind(Uuid::now_v7())
+            .bind(actor.0)
+            .bind(Uuid::now_v7().to_string())
+            .execute(&db.app)
+            .await?;
+    }
+    assert!(
+        sqlx::query(
+            "CREATE UNIQUE INDEX CONCURRENTLY sessions_actor_id_invalid ON sessions (actor_id)"
+        )
+        .execute(&db.owner)
+        .await
+        .is_err()
+    );
+    let invalid: bool = sqlx::query_scalar(
+        "SELECT NOT indisvalid FROM pg_index WHERE indexrelid = 'sessions_actor_id_invalid'::regclass",
+    )
+    .fetch_one(&db.owner)
+    .await?;
+    assert!(invalid);
+    assert_eq!(
+        unindexed_foreign_keys_to_deletable_rows(&db).await?,
+        reported
+    );
+    db.finish().await
+}
+
+async fn unindexed_foreign_keys_to_deletable_rows(db: &Database) -> Result<Vec<(String, String)>> {
+    // PostgreSQL does not index the referencing columns of a foreign key. Without one, every
+    // delete from the referenced table scans the referencing table to check or cascade. Rows
+    // the application can delete are those it holds DELETE on, and those a cascade from them
+    // reaches. An invalid index, left by a failed concurrent build, is never used.
+    Ok(sqlx::query_as(
+        "WITH RECURSIVE deletable(relid) AS (
+            SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind = 'r'
+                AND has_table_privilege('fukulow_app', c.oid, 'DELETE')
+            UNION
+            SELECT k.conrelid FROM pg_constraint k JOIN deletable d ON d.relid = k.confrelid
+            WHERE k.contype = 'f' AND k.confdeltype = 'c'
+        )
+        SELECT k.conrelid::regclass::text, k.conname::text
+        FROM pg_constraint k JOIN deletable d ON d.relid = k.confrelid
+        WHERE k.contype = 'f' AND NOT EXISTS (
+            SELECT 1 FROM pg_index i
+            WHERE i.indrelid = k.conrelid AND i.indisvalid
+                AND i.indpred IS NULL AND i.indexprs IS NULL
+                AND i.indnkeyatts >= cardinality(k.conkey)
+                AND (SELECT array_agg(x ORDER BY x) FROM unnest((i.indkey::int2[])[0:cardinality(k.conkey) - 1]) x)
+                    = (SELECT array_agg(x ORDER BY x) FROM unnest(k.conkey) x)
+        )
+        ORDER BY 1, 2",
+    )
+    .fetch_all(&db.owner)
+    .await?)
 }
 
 #[tokio::test]
