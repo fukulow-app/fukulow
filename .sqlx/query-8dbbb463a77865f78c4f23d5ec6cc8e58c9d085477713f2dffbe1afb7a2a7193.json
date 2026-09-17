@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organization_members SET status = 'active' WHERE organization_id = $1 AND actor_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8dbbb463a77865f78c4f23d5ec6cc8e58c9d085477713f2dffbe1afb7a2a7193"
+}

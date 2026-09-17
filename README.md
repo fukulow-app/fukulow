@@ -35,6 +35,10 @@ shutdown is handled through Unix signals, and Windows is not a supported host.
 
 ```bash
 cp .env.example .env
+docker compose up -d postgres
+set -a; . ./.env; set +a
+cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features postgres,rustls
+cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
 cargo run -p app
 ```
 
@@ -49,8 +53,58 @@ content-type: application/json
 {"status":"ok"}
 ```
 
-**No database is needed yet.** `compose.yaml` is here for the schema that comes
-next; starting it now would run PostgreSQL for nothing.
+`DATABASE_URL` is required. Startup opens a pool and checks PostgreSQL with a
+round trip; failures name the variable without disclosing its value. The server
+connects as `fukulow_app` and never runs migrations. The migrator owns the tables
+and uses the separate `MIGRATOR_DATABASE_URL`.
+
+`docker/init/001-roles.sql` runs automatically only for a new Docker volume. For
+an existing development volume, apply it once before migrating:
+
+```bash
+docker compose exec -T postgres psql -U fukulow -d fukulow_dev < docker/init/001-roles.sql
+```
+
+For self-hosting, run the following once as the cluster administrator in the target
+database, replacing the development passwords and database name first. Neither role
+is a superuser or has `BYPASSRLS`. Only the migrator needs `CREATEDB`, for isolated
+test databases; it can be omitted on a production-only migration account.
+
+```sql
+-- Development credentials only; self-hosters must replace both passwords. gitleaks:allow
+CREATE ROLE fukulow_migrator LOGIN PASSWORD 'fukulow_migrator' NOSUPERUSER NOBYPASSRLS CREATEDB NOCREATEROLE;
+-- The runtime cannot create objects or assume the migration role. gitleaks:allow
+CREATE ROLE fukulow_app LOGIN PASSWORD 'fukulow_app' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+GRANT CONNECT ON DATABASE fukulow_dev TO fukulow_migrator, fukulow_app;
+GRANT USAGE, CREATE ON SCHEMA public TO fukulow_migrator;
+GRANT USAGE ON SCHEMA public TO fukulow_app;
+```
+
+Migrations grant privileges explicitly per table and per updatable column. They
+fail if the roles have not been created. Do not use default privileges. Reverting
+the initial schema destroys its data; take a backup before a deliberate rollback.
+
+```bash
+cargo sqlx migrate revert --database-url "$MIGRATOR_DATABASE_URL"
+cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
+DATABASE_URL="$MIGRATOR_DATABASE_URL" cargo sqlx prepare --workspace -- --all-targets
+DATABASE_URL="$MIGRATOR_DATABASE_URL" cargo sqlx prepare --workspace --check -- --all-targets
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all
+```
+
+Tests require both URLs and create disposable `fukulow_test_*` databases on the
+local development server. Operations and privilege tests connect as the application
+role; schema inspection and audit assertions connect as the migrator. A failing
+test can leave its disposable database for diagnosis. Never point tests at a
+production server.
+
+The `build` job compiles with `SQLX_OFFLINE=true` and no database. The `database`
+job uses PostgreSQL 17, exercises migrations on empty and populated databases,
+checks the actual server and migration count, runs all tests, and checks `.sqlx/`.
+After this change merges, a repository administrator must add `database` to the
+required checks on `main`; a workflow cannot change branch protection itself.
 
 ## Contributing
 

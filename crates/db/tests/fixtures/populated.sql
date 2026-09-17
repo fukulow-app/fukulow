@@ -1,0 +1,11 @@
+-- Fixed UUIDv7 fixtures make a destructive down/up cycle independent of the application.
+INSERT INTO actors (id, type, display_name) VALUES ('01995100-0000-7000-8000-000000000001', 'human', 'Fixture person');
+-- Storage fixture only, deliberately not a usable password hash. gitleaks:allow
+INSERT INTO users (actor_id, actor_type, email, password_hash) VALUES ('01995100-0000-7000-8000-000000000001', 'human', 'migration@example.invalid', 'fixture-password-hash');
+INSERT INTO organizations (id, name, slug) VALUES ('01995100-0000-7000-8000-000000000002', 'Fixture organization', 'fixture');
+INSERT INTO organization_members (organization_id, actor_id, role) VALUES ('01995100-0000-7000-8000-000000000002', '01995100-0000-7000-8000-000000000001', 'owner');
+INSERT INTO teams (id, organization_id, name) VALUES ('01995100-0000-7000-8000-000000000003', '01995100-0000-7000-8000-000000000002', 'Fixture team');
+INSERT INTO team_members (organization_id, team_id, actor_id) VALUES ('01995100-0000-7000-8000-000000000002', '01995100-0000-7000-8000-000000000003', '01995100-0000-7000-8000-000000000001');
+INSERT INTO invites (id, organization_id, kind, target_team_id, token_hash, expires_at, max_uses, created_by_actor_id) VALUES ('01995100-0000-7000-8000-000000000004', '01995100-0000-7000-8000-000000000002', 'team', '01995100-0000-7000-8000-000000000003', 'fixture-invite-hash', now(), 1, '01995100-0000-7000-8000-000000000001');
+INSERT INTO sessions (id, actor_id, token_hash, expires_at) VALUES ('01995100-0000-7000-8000-000000000005', '01995100-0000-7000-8000-000000000001', 'fixture-session-hash', now());
+INSERT INTO audit_events (id, organization_id, actor_id, action, target_type, target_id, metadata) VALUES ('01995100-0000-7000-8000-000000000006', '01995100-0000-7000-8000-000000000002', '01995100-0000-7000-8000-000000000001', 'organization.created', 'organization', '01995100-0000-7000-8000-000000000002', '{}');

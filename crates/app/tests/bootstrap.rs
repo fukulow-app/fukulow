@@ -16,7 +16,6 @@ use support::AppProcess;
 fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_app"));
     command
-        .env_remove("DATABASE_URL")
         .env("FUKULOW_BIND_ADDR", "127.0.0.1:0")
         .env("RUST_LOG", "info");
     command
@@ -152,4 +151,57 @@ fn sigint_drains_an_in_flight_request() -> Result<()> {
 #[test]
 fn sigterm_drains_an_in_flight_request() -> Result<()> {
     assert_graceful_shutdown("-TERM")
+}
+
+#[test]
+fn missing_database_url_fails_naming_only_the_variable() -> Result<()> {
+    let mut command = command();
+    command.env_remove("DATABASE_URL");
+    let mut app = AppProcess::spawn_configured(command)?;
+    assert!(!app.wait_for_exit()?.success());
+    assert!(app.remaining_logs().contains("DATABASE_URL"));
+    Ok(())
+}
+
+#[test]
+fn invalid_database_url_fails_without_disclosing_the_value() -> Result<()> {
+    let rejected = "invalid-database-url-fixture";
+    let mut command = command();
+    command.env("DATABASE_URL", rejected);
+    let mut app = AppProcess::spawn_configured(command)?;
+    assert!(!app.wait_for_exit()?.success());
+    let logs = app.remaining_logs();
+    assert!(logs.contains("DATABASE_URL"));
+    assert!(!logs.contains(rejected));
+    Ok(())
+}
+
+#[test]
+fn non_postgres_listener_fails_the_startup_round_trip() -> Result<()> {
+    use std::io::Write;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    // A reserved fixture marker, not a credential. gitleaks:allow
+    const MARKER: &str = "database-credential-fixture";
+    let url = format!(
+        "postgres://fixture:{MARKER}@{}/fixture",
+        listener.local_addr()?
+    );
+    let mut command = command();
+    command.env("DATABASE_URL", &url);
+    let mut app = AppProcess::spawn_configured(command)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.write_all(b"not PostgreSQL");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!app.wait_for_exit()?.success());
+    let logs = app.remaining_logs();
+    assert!(logs.contains("DATABASE_URL"));
+    assert!(!logs.contains(&url));
+    assert!(!logs.contains(MARKER));
+    Ok(())
 }

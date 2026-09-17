@@ -46,6 +46,22 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 # The binary is allowed to lose the error type at the boundary; libraries are not.
 anyhow = "1.0"
 thiserror = "2.0"
+# Default features are off: they add the `any` driver, which would let a query be
+# written against no particular database. `chrono` is not enabled -- one time type.
+sqlx = { version = "0.9", default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls-ring-native-roots",
+    "macros",
+    "migrate",
+    "uuid",
+    "time",
+    "json",
+] }
+uuid = { version = "1.26", features = ["v7", "serde"] }
+time = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

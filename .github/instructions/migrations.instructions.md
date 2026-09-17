@@ -60,6 +60,9 @@ self-hoster has run it.
 - **Flag** `DELETE` on `actors` or `organization_members` granted to `fukulow_app`.
   Those rows are never deleted. (`DELETE` on `users` is expected: a person's `users`
   row is deleted when they leave the service.)
+- **Flag** a table the application locks with `FOR UPDATE` or `FOR SHARE` on
+  which `fukulow_app` holds no column `UPDATE`. PostgreSQL requires `UPDATE` on
+  at least one column even if the statement only locks the row.
 
 ## Columns
 
