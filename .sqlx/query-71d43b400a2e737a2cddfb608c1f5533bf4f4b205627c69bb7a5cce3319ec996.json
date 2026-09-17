@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE channels SET next_message_seq = next_message_seq + 1 WHERE id = $1 AND organization_id = $2 RETURNING next_message_seq",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "next_message_seq",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "channels",
+            "name": "next_message_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "71d43b400a2e737a2cddfb608c1f5533bf4f4b205627c69bb7a5cce3319ec996"
+}

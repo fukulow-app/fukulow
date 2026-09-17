@@ -1,4 +1,6 @@
-use domain::{ActorId, OrganizationId, OrganizationRole, TeamId, TeamRole};
+use domain::{
+    ActorId, ChannelId, ChannelScope, OrganizationId, OrganizationRole, TeamId, TeamRole,
+};
 use serde_json::{Value, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -108,6 +110,34 @@ impl Event {
             target_type: "actor",
             target_id: id.0,
             metadata: json!({"team_id": team, "reason": reason}),
+        }
+    }
+    pub(crate) fn channel_created(id: ChannelId, scope: ChannelScope) -> Self {
+        let metadata = match scope {
+            ChannelScope::Organization => json!({"scope": scope.as_str()}),
+            ChannelScope::Team(team) => json!({"scope": scope.as_str(), "team_id": team}),
+        };
+        Self {
+            action: "channel.created",
+            target_type: "channel",
+            target_id: id.0,
+            metadata,
+        }
+    }
+    pub(crate) fn channel_member_added(id: ActorId, channel: ChannelId) -> Self {
+        Self {
+            action: "channel.member.added",
+            target_type: "actor",
+            target_id: id.0,
+            metadata: json!({"channel_id": channel}),
+        }
+    }
+    pub(crate) fn channel_member_left(id: ActorId, channel: ChannelId) -> Self {
+        Self {
+            action: "channel.member.removed",
+            target_type: "actor",
+            target_id: id.0,
+            metadata: json!({"channel_id": channel, "reason": "left_service"}),
         }
     }
     pub(crate) async fn write(

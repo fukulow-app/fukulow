@@ -152,3 +152,74 @@ pub(crate) fn rejected<T>(result: std::result::Result<T, sqlx::Error>, code: &st
         "unexpected database error code"
     );
 }
+
+pub(crate) struct Conversation {
+    pub owner: ActorId,
+    pub organization: OrganizationId,
+    pub team: domain::TeamId,
+    pub channel: domain::ChannelId,
+}
+
+impl Conversation {
+    pub(crate) async fn new(db: &Database) -> Result<Self> {
+        let owner = db.person().await?;
+        let organization = db.organization(owner).await?;
+        let team = db::create_team(&db.app, owner, organization, "Fixture team").await?;
+        let channel = db::create_channel(
+            &db.app,
+            owner,
+            organization,
+            domain::ChannelScope::Team(team),
+            "general",
+        )
+        .await?;
+        Ok(Self {
+            owner,
+            organization,
+            team,
+            channel,
+        })
+    }
+
+    pub(crate) async fn counter(&self, db: &Database) -> Result<i64> {
+        Ok(sqlx::query_scalar(
+            "SELECT next_message_seq FROM channels WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.organization.0)
+        .bind(self.channel.0)
+        .fetch_one(&db.app)
+        .await?)
+    }
+
+    pub(crate) async fn post(&self, db: &Database) -> Result<db::Message> {
+        match db::post_message(
+            &db.app,
+            self.organization,
+            self.channel,
+            self.owner,
+            message_id(),
+            "Fixture body",
+        )
+        .await?
+        {
+            db::PostMessage::Posted(message) => Ok(message),
+            db::PostMessage::AlreadyPosted(_) => Err("new id was already posted".into()),
+        }
+    }
+}
+
+pub(crate) fn message_id() -> domain::MessageId {
+    domain::MessageId::from_client(Uuid::now_v7()).expect("UUID generator must produce v7")
+}
+
+pub(crate) async fn wait_for_blocked_operations(owner: &PgPool, count: i64) -> Result {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND usename = 'fukulow_app' AND cardinality(pg_blocking_pids(pid)) > 0")
+                .fetch_one(owner).await?;
+            if waiting >= count { return Ok::<_, sqlx::Error>(()); }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await??;
+    Ok(())
+}

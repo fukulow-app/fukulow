@@ -1,6 +1,6 @@
 use super::{LeaveServiceError, active_owners};
 use crate::audit::{Event, RemovalReason};
-use domain::{ActorId, OrganizationId, OwnerChange, TeamId, check_owner_change};
+use domain::{ActorId, ChannelId, OrganizationId, OwnerChange, TeamId, check_owner_change};
 use sqlx::{PgConnection, PgPool};
 
 pub async fn leave_service(pool: &PgPool, actor_id: ActorId) -> Result<(), LeaveServiceError> {
@@ -16,17 +16,21 @@ pub async fn leave_service(pool: &PgPool, actor_id: ActorId) -> Result<(), Leave
         return Err(LeaveServiceError::NotFound);
     }
     // The actor lock closes membership additions; the common order prevents two leavers deadlocking.
-    let organizations = sqlx::query!("SELECT id FROM organizations o WHERE EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = o.id AND m.actor_id = $1) ORDER BY id FOR UPDATE", actor_id.0)
+    let organizations = sqlx::query!("SELECT id FROM organizations o WHERE EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = o.id AND m.actor_id = $1) OR EXISTS (SELECT 1 FROM channels c JOIN channel_members m ON m.channel_id = c.id WHERE c.organization_id = o.id AND m.actor_id = $1) ORDER BY id FOR UPDATE", actor_id.0)
         .fetch_all(&mut *tx).await?;
     for row in organizations {
         let organization = OrganizationId(row.id);
-        let owners = active_owners(&mut tx, organization).await?;
-        check_owner_change(&owners, OwnerChange::Leave(actor_id)).map_err(|_| {
-            LeaveServiceError::LastOwner {
-                organization_id: organization,
-            }
-        })?;
-        leave_organization(&mut tx, organization, actor_id).await?;
+        let member = sqlx::query!("SELECT actor_id FROM organization_members WHERE organization_id = $1 AND actor_id = $2", organization.0, actor_id.0).fetch_optional(&mut *tx).await?;
+        if member.is_some() {
+            let owners = active_owners(&mut tx, organization).await?;
+            check_owner_change(&owners, OwnerChange::Leave(actor_id)).map_err(|_| {
+                LeaveServiceError::LastOwner {
+                    organization_id: organization,
+                }
+            })?;
+            leave_organization(&mut tx, organization, actor_id).await?;
+        }
+        leave_channels(&mut tx, organization, actor_id).await?;
     }
     sqlx::query!("DELETE FROM users WHERE actor_id = $1", actor_id.0)
         .execute(&mut *tx)
@@ -67,5 +71,19 @@ async fn leave_organization(
     }
     // A previously left membership can still carry an override until service departure.
     sqlx::query!("UPDATE organization_members SET display_name = NULL WHERE organization_id = $1 AND actor_id = $2", organization.0, actor.0).execute(conn).await?;
+    Ok(())
+}
+
+async fn leave_channels(
+    conn: &mut PgConnection,
+    organization: OrganizationId,
+    actor: ActorId,
+) -> Result<(), sqlx::Error> {
+    let removed = sqlx::query!("DELETE FROM channel_members m USING channels c WHERE m.channel_id = c.id AND c.organization_id = $1 AND m.actor_id = $2 RETURNING m.channel_id", organization.0, actor.0).fetch_all(&mut *conn).await?;
+    for row in removed {
+        Event::channel_member_left(actor, ChannelId(row.channel_id))
+            .write(conn, organization, actor)
+            .await?;
+    }
     Ok(())
 }
