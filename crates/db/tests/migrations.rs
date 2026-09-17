@@ -11,6 +11,13 @@ async fn migrations_reverse_empty_and_populated_databases() -> Result {
                 .execute(&db.app)
                 .await?;
         }
+        migrator.undo(&db.owner, 202609170001).await?;
+        let channel_tables: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('channels', 'channel_members', 'messages')").fetch_one(&db.owner).await?;
+        assert_eq!(channel_tables, 0);
+        let channel_audits: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE organization_id = $1 AND target_type = 'channel'")
+            .bind(uuid::Uuid::from_u128(0x01995100_0000_7000_8000_000000000002)).fetch_one(&db.owner).await?;
+        assert_eq!(channel_audits, i64::from(populated));
+        migrator.run(&db.owner).await?;
         migrator.undo(&db.owner, 0).await?;
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_sqlx_migrations'").fetch_one(&db.owner).await?;
         assert_eq!(count, 0);

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM organizations o WHERE EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = o.id AND m.actor_id = $1) ORDER BY id FOR UPDATE",
+  "query": "SELECT id FROM organizations o WHERE EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = o.id AND m.actor_id = $1) OR EXISTS (SELECT 1 FROM channels c JOIN channel_members m ON m.channel_id = c.id WHERE c.organization_id = o.id AND m.actor_id = $1) ORDER BY id FOR UPDATE",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "e36ee1c14876dc15f5585577e4189f3693075af50a445474e015840e30940d00"
+  "hash": "aff3f8db153355ebc599082c14453d5e8c1027cefdddc6860c89ec6197a8f71c"
 }

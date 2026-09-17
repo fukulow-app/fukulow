@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT scope FROM channels WHERE organization_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scope",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "channels",
+            "name": "scope"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "96e044e1f042eb7508d34f68000006dcb7a3375e6ec460195e655f67f2fb793e"
+}

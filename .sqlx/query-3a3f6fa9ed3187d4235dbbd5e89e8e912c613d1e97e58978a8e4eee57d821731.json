@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM channel_members m USING channels c WHERE m.channel_id = c.id AND c.organization_id = $1 AND m.actor_id = $2 RETURNING m.channel_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "channel_members",
+            "name": "channel_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3a3f6fa9ed3187d4235dbbd5e89e8e912c613d1e97e58978a8e4eee57d821731"
+}

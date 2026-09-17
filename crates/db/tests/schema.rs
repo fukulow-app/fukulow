@@ -6,7 +6,10 @@ use support::{Database, Result};
 const TABLES: &[&str] = &[
     "actors",
     "audit_events",
+    "channel_members",
+    "channels",
     "invites",
+    "messages",
     "organization_members",
     "organizations",
     "sessions",
@@ -25,6 +28,7 @@ async fn nullable_columns_are_exactly_the_documented_exceptions() -> Result {
         [
             ("actors", "deleted_at"),
             ("actors", "display_name"),
+            ("channels", "team_id"),
             ("invites", "revoked_at"),
             ("invites", "target_team_id"),
             ("organization_members", "display_name"),
@@ -48,7 +52,7 @@ async fn defaults_and_timestamp_types_are_exact() -> Result {
             (_, "created_at") => Some("now()"),
             ("organization_members" | "team_members", "role") => Some("'member'::text"),
             ("organization_members", "status") => Some("'active'::text"),
-            ("invites", "used_count") => Some("0"),
+            ("invites", "used_count") | ("channels", "next_message_seq") => Some("0"),
             _ => None,
         };
         assert_eq!(default.as_deref(), expected, "{table}.{column}");
@@ -70,11 +74,32 @@ async fn composite_foreign_keys_cannot_be_disabled_by_nulls() -> Result {
     let db = Database::new().await?;
     let rows: Vec<(String, String, bool)> = sqlx::query_as("SELECT c.relname::text, a.attname::text, a.attnotnull FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN LATERAL unnest(k.conkey) key(attnum) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = key.attnum WHERE n.nspname = 'public' AND k.contype = 'f' AND cardinality(k.conkey) > 1 ORDER BY 1, 2")
         .fetch_all(&db.owner).await?;
-    assert_eq!(rows.len(), 8);
+    assert_eq!(
+        rows.iter()
+            .map(|(table, column, _)| (table.as_str(), column.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("channel_members", "channel_id"),
+            ("channel_members", "channel_scope"),
+            ("channels", "organization_id"),
+            ("channels", "team_id"),
+            ("invites", "organization_id"),
+            ("invites", "target_team_id"),
+            ("messages", "channel_id"),
+            ("messages", "organization_id"),
+            ("team_members", "actor_id"),
+            ("team_members", "organization_id"),
+            ("team_members", "organization_id"),
+            ("team_members", "team_id"),
+            ("users", "actor_id"),
+            ("users", "actor_type"),
+        ]
+    );
     for (table, column, required) in rows {
         assert_eq!(
             required,
-            !(table == "invites" && column == "target_team_id"),
+            !((table == "invites" && column == "target_team_id")
+                || (table == "channels" && column == "team_id")),
             "{table}.{column}"
         );
     }
@@ -99,6 +124,7 @@ async fn actors_are_global_and_names_have_only_the_published_locations() -> Resu
         names,
         [
             ("actors", "display_name"),
+            ("channels", "name"),
             ("organization_members", "display_name"),
             ("organizations", "name"),
             ("teams", "name")
@@ -114,6 +140,7 @@ fn updatable(table: &str, column: &str) -> bool {
     matches!(
         (table, column),
         ("actors", "display_name" | "deleted_at")
+            | ("channels", "next_message_seq")
             | ("organizations", "name")
             | ("organization_members", "role" | "status" | "display_name")
             | ("team_members", "role")
@@ -153,7 +180,9 @@ async fn application_privileges_are_exact_for_every_table_and_column() -> Result
             let expected = match privilege {
                 "SELECT" => table != "audit_events" && table != "_sqlx_migrations",
                 "INSERT" => table != "_sqlx_migrations",
-                "DELETE" => table == "users" || table == "team_members",
+                "DELETE" => {
+                    table == "users" || table == "team_members" || table == "channel_members"
+                }
                 _ => false,
             };
             assert_eq!(granted, expected, "{table}: {privilege}");

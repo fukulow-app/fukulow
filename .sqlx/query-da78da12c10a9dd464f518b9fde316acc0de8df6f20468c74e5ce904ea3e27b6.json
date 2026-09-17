@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT actor_id FROM organization_members WHERE organization_id = $1 AND actor_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "actor_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "organization_members",
+            "name": "actor_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "da78da12c10a9dd464f518b9fde316acc0de8df6f20468c74e5ce904ea3e27b6"
+}

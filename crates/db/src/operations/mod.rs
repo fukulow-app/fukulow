@@ -1,3 +1,7 @@
+mod channels;
+mod messages;
+pub use channels::{add_channel_member, create_channel};
+pub use messages::{Message, PostMessage, messages_after, messages_before, post_message};
 mod errors;
 mod identity;
 mod leaving;

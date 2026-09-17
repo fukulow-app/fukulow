@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM channels WHERE organization_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "channels",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "632edf8de377618df3feae0541bf505016eeb5c6bafeda914aa0088fa67d4144"
+}
