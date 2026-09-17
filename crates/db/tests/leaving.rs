@@ -1,5 +1,5 @@
 mod support;
-use domain::{ActorId, OrganizationId, TeamRole};
+use domain::{ActorId, OrganizationId, OrganizationRole as Role, TeamRole};
 use serde_json::json;
 use support::{Database, Result};
 use uuid::Uuid;
@@ -174,5 +174,31 @@ async fn departed_or_inactive_actors_cannot_gain_memberships() -> Result {
         db::reactivate_member(&db.app, owner, org, actor).await,
         Err(db::ReactivateMemberError::ActorDeparted)
     ));
+    db.finish().await
+}
+
+#[tokio::test]
+async fn a_left_membership_cannot_change_role() -> Result {
+    let db = Database::new().await?;
+    let owner = db.person().await?;
+    let left = db.person().await?;
+    let departed = db.person().await?;
+    let org = db.organization(owner).await?;
+    db.member(org, left, "member").await?;
+    db.member(org, departed, "member").await?;
+    sqlx::query("UPDATE organization_members SET status = 'left' WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(left.0).execute(&db.app).await?;
+    db::leave_service(&db.app, departed).await?;
+    let before = db.audit(org).await?;
+    for actor in [left, departed] {
+        for role in [Role::Owner, Role::Admin, Role::Member] {
+            assert!(matches!(
+                db::change_member_role(&db.app, owner, org, actor, role).await,
+                Err(db::ChangeMemberRoleError::NotFound)
+            ));
+        }
+        let membership: (String, String) = sqlx::query_as("SELECT role, status FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.app).await?;
+        assert_eq!(membership, ("member".into(), "left".into()));
+    }
+    assert_eq!(db.audit(org).await?, before);
     db.finish().await
 }
