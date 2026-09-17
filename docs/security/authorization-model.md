@@ -151,8 +151,9 @@ when something reaches the tables another way.
   rows for departure, without seeing anyone else's rows. Audits and listing
   removals precede all status transitions. An outside actor leaving the service
   records the removal of each of its own listings in the channel's organization —
-  the one audit it may write there; it gains no access to that organization Their own inactive organization
-  membership can only become `left` with its display name cleared and role unchanged
+  the one audit it may write there; it gains no access to that organization.
+  An inactive actor's own organization membership can only become `left`, with its
+  display name cleared and its role unchanged
 - **Passing row security is not permission.** Policies decide visibility;
   `can(actor, Capability)` decides what may be done before an operation runs
 - The application role cannot bypass row security: it does not own the tables,
