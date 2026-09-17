@@ -25,6 +25,9 @@ CREATE TABLE channel_members (
     PRIMARY KEY (channel_id, actor_id),
     FOREIGN KEY (channel_id, channel_scope) REFERENCES channels (id, scope)
 );
+-- The primary key leads with channel_id; leaving the service finds an actor's listings
+-- across every channel, which would otherwise scan the whole table.
+CREATE INDEX channel_members_actor_id_idx ON channel_members (actor_id);
 CREATE TABLE messages (
     id uuid PRIMARY KEY,
     organization_id uuid NOT NULL REFERENCES organizations (id),

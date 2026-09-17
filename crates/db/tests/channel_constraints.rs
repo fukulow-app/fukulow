@@ -109,6 +109,18 @@ async fn channel_names_are_unique_per_owner_and_ascii_case_insensitive() -> Resu
 }
 
 #[tokio::test]
+async fn channel_members_are_indexed_by_actor_for_departure() -> Result {
+    let db = Database::new().await?;
+    let definition: String = sqlx::query_scalar(
+        "SELECT indexdef FROM pg_indexes WHERE tablename = 'channel_members' AND indexname = 'channel_members_actor_id_idx'",
+    )
+    .fetch_one(&db.owner)
+    .await?;
+    assert!(definition.ends_with("(actor_id)"), "{definition}");
+    db.finish().await
+}
+
+#[tokio::test]
 async fn channel_name_length_counts_characters_and_refuses_both_boundaries() -> Result {
     let db = Database::new().await?;
     let c = Conversation::new(&db).await?;
