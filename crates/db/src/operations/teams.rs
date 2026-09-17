@@ -4,17 +4,9 @@ use super::{
 };
 use crate::audit::{Event, RemovalReason};
 use crate::context::{Context, begin};
-use domain::{ActorId, OrganizationId, TeamId, TeamRole};
+use domain::{ActorId, MemberStatus, OrganizationId, TeamId, TeamRole};
 use sqlx::PgPool;
 use uuid::Uuid;
-
-fn team_role(value: &str) -> Result<TeamRole, sqlx::Error> {
-    match value {
-        "manager" => Ok(TeamRole::Manager),
-        "member" => Ok(TeamRole::Member),
-        _ => Err(sqlx::Error::Protocol("invalid stored team role".into())),
-    }
-}
 
 pub async fn create_team(
     pool: &PgPool,
@@ -77,7 +69,9 @@ pub async fn add_team_member(
     if departed == Some(true) {
         return Err(AddTeamMemberError::ActorDeparted);
     }
-    if member.status != "active" {
+    let status = MemberStatus::parse(&member.status)
+        .ok_or_else(|| sqlx::Error::Protocol("invalid stored membership status".into()))?;
+    if status != MemberStatus::Active {
         return Err(AddTeamMemberError::NotAnActiveMember);
     }
     sqlx::query!("INSERT INTO team_members (team_id, actor_id, organization_id, role) VALUES ($1, $2, $3, $4)", team_id.0, actor_id.0, organization_id.0, role.as_str())
@@ -106,7 +100,8 @@ pub async fn change_team_member_role(
     }
     let row = sqlx::query!("SELECT role FROM team_members WHERE organization_id = $1 AND team_id = $2 AND actor_id = $3", organization_id.0, team_id.0, actor_id.0)
         .fetch_optional(&mut *tx).await?.ok_or(ChangeTeamMemberRoleError::NotFound)?;
-    let from = team_role(&row.role)?;
+    let from = TeamRole::parse(&row.role)
+        .ok_or_else(|| sqlx::Error::Protocol("invalid stored team role".into()))?;
     if from == role {
         tx.commit().await?;
         return Ok(());

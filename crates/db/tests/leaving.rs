@@ -64,7 +64,7 @@ async fn leaving_erases_personal_data_memberships_and_sessions_but_preserves_his
                 &"team.member.removed".into(),
                 &"actor".into(),
                 actor.0,
-                &json!({"team_id":team,"reason":"left_service"})
+                &json!({"team_id":team.0,"reason":"left_service"})
             )
         );
         let resolves: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events e JOIN actors a ON a.id = e.target_id WHERE e.organization_id = $1 AND e.target_type = 'actor' AND a.id = $2").bind(org.0).bind(actor.0).fetch_one(&db.inspector).await?;
@@ -244,7 +244,7 @@ async fn departure_clears_active_suspended_and_left_memberships_with_exact_audit
             action: "channel.member.removed".into(),
             target_type: "actor".into(),
             target: actor.0,
-            metadata: serde_json::json!({"channel_id": c.channel, "reason": "left_service"}),
+            metadata: serde_json::json!({"channel_id": c.channel.0, "reason": "left_service"}),
         }];
         if old_status != "left" {
             expected.push(support::Audit {
@@ -260,7 +260,7 @@ async fn departure_clears_active_suspended_and_left_memberships_with_exact_audit
             action: "team.member.removed".into(),
             target_type: "actor".into(),
             target: actor.0,
-            metadata: serde_json::json!({"team_id": c.team, "reason": "left_service"}),
+            metadata: serde_json::json!({"team_id": c.team.0, "reason": "left_service"}),
         });
         assert_eq!(events, expected);
     }

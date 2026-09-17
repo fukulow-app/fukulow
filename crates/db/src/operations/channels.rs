@@ -70,7 +70,7 @@ pub async fn add_channel_member(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(AddChannelMemberError::NotFound)?;
-    if row.scope == "organization" {
+    if row.scope == ChannelScope::Organization.as_str() {
         return Err(AddChannelMemberError::OrganizationScoped);
     }
     match departed {

@@ -32,7 +32,7 @@ impl Event {
             action: "organization.member.added",
             target_type: "actor",
             target_id: id.0,
-            metadata: json!({"role": role}),
+            metadata: json!({"role": role.as_str()}),
         }
     }
     pub(crate) fn member_role_changed(
@@ -44,7 +44,7 @@ impl Event {
             action: "organization.member.role_changed",
             target_type: "actor",
             target_id: id.0,
-            metadata: json!({"from": from, "to": to}),
+            metadata: json!({"from": from.as_str(), "to": to.as_str()}),
         }
     }
     pub(crate) fn member_suspended(id: ActorId) -> Self {
@@ -84,7 +84,7 @@ impl Event {
             action: "team.member.added",
             target_type: "actor",
             target_id: id.0,
-            metadata: json!({"team_id": team, "role": role}),
+            metadata: json!({"team_id": team.0, "role": role.as_str()}),
         }
     }
     pub(crate) fn team_member_role_changed(
@@ -97,7 +97,7 @@ impl Event {
             action: "team.member.role_changed",
             target_type: "actor",
             target_id: id.0,
-            metadata: json!({"team_id": team, "from": from, "to": to}),
+            metadata: json!({"team_id": team.0, "from": from.as_str(), "to": to.as_str()}),
         }
     }
     pub(crate) fn team_member_removed(id: ActorId, team: TeamId, reason: RemovalReason) -> Self {
@@ -109,13 +109,13 @@ impl Event {
             action: "team.member.removed",
             target_type: "actor",
             target_id: id.0,
-            metadata: json!({"team_id": team, "reason": reason}),
+            metadata: json!({"team_id": team.0, "reason": reason}),
         }
     }
     pub(crate) fn channel_created(id: ChannelId, scope: ChannelScope) -> Self {
         let metadata = match scope {
             ChannelScope::Organization => json!({"scope": scope.as_str()}),
-            ChannelScope::Team(team) => json!({"scope": scope.as_str(), "team_id": team}),
+            ChannelScope::Team(team) => json!({"scope": scope.as_str(), "team_id": team.0}),
         };
         Self {
             action: "channel.created",
@@ -129,7 +129,7 @@ impl Event {
             action: "channel.member.added",
             target_type: "actor",
             target_id: id.0,
-            metadata: json!({"channel_id": channel}),
+            metadata: json!({"channel_id": channel.0}),
         }
     }
     pub(crate) fn channel_member_left(id: ActorId, channel: ChannelId) -> Self {
@@ -137,7 +137,7 @@ impl Event {
             action: "channel.member.removed",
             target_type: "actor",
             target_id: id.0,
-            metadata: json!({"channel_id": channel, "reason": "left_service"}),
+            metadata: json!({"channel_id": channel.0, "reason": "left_service"}),
         }
     }
     pub(crate) async fn write(

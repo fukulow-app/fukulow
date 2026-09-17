@@ -36,7 +36,7 @@ async fn create_channel_audits_each_scope_and_refuses_duplicate_names() -> Resul
                 action: "channel.created".into(),
                 target_type: "channel".into(),
                 target: c.channel.0,
-                metadata: json!({"scope": "team", "team_id": c.team})
+                metadata: json!({"scope": "team", "team_id": c.team.0})
             },
             Audit {
                 actor: c.owner.0,
@@ -129,7 +129,7 @@ async fn organization_member_can_join_and_only_success_is_audited() -> Result {
             action: "channel.member.added".into(),
             target_type: "actor".into(),
             target: outside.0,
-            metadata: json!({"channel_id": c.channel})
+            metadata: json!({"channel_id": c.channel.0})
         }]
     );
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1").bind(c.organization.0).fetch_one(&db.inspector).await?;
@@ -180,7 +180,7 @@ async fn leaving_removes_internal_and_external_channels_and_audits_each_organiza
                 action: "channel.member.removed".into(),
                 target_type: "actor".into(),
                 target: actor.0,
-                metadata: json!({"channel_id": c.channel, "reason": "left_service"})
+                metadata: json!({"channel_id": c.channel.0, "reason": "left_service"})
             }]
         );
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(c.organization.0).bind(actor.0).fetch_one(&db.inspector).await?;
