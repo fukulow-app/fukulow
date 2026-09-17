@@ -1,23 +1,22 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT actor_id FROM organization_members WHERE organization_id = $1 AND actor_id = $2",
+  "query": "SELECT DISTINCT organization_id FROM channel_members WHERE actor_id = $1 ORDER BY organization_id",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "actor_id",
+        "name": "organization_id",
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "organization_members",
-            "name": "actor_id"
+            "table": "channel_members",
+            "name": "organization_id"
           }
         }
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
         "Uuid"
       ]
     },
@@ -25,5 +24,5 @@
       false
     ]
   },
-  "hash": "da78da12c10a9dd464f518b9fde316acc0de8df6f20468c74e5ce904ea3e27b6"
+  "hash": "939bcd46dbc7485820e320d3593b9d267ed945874c9945bbe6f39b5a6b650722"
 }

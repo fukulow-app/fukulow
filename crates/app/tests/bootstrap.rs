@@ -17,7 +17,8 @@ fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_app"));
     command
         .env("FUKULOW_BIND_ADDR", "127.0.0.1:0")
-        .env("RUST_LOG", "info");
+        .env("RUST_LOG", "info")
+        .env_remove("INSPECTOR_DATABASE_URL");
     command
 }
 
@@ -203,5 +204,17 @@ fn non_postgres_listener_fails_the_startup_round_trip() -> Result<()> {
     assert!(logs.contains("DATABASE_URL"));
     assert!(!logs.contains(&url));
     assert!(!logs.contains(MARKER));
+    Ok(())
+}
+
+#[test]
+fn inspector_configuration_refuses_startup_without_disclosing_its_value() -> Result<()> {
+    let mut command = command();
+    command.env("INSPECTOR_DATABASE_URL", "inspection-fixture-marker");
+    let mut app = AppProcess::spawn_configured(command)?;
+    assert!(!app.wait_for_exit()?.success());
+    let logs = app.remaining_logs();
+    assert!(logs.contains("INSPECTOR_DATABASE_URL"));
+    assert!(!logs.contains("inspection-fixture-marker"));
     Ok(())
 }

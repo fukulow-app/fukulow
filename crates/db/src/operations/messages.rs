@@ -1,4 +1,5 @@
 use super::{MessagesAfterError, MessagesBeforeError, PostMessageError};
+use crate::context::{Context, begin};
 use domain::{ActorId, ChannelId, ChannelSeq, MessageId, OrganizationId};
 use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
@@ -69,7 +70,7 @@ pub async fn post_message(
     if !(1..=4000).contains(&body.chars().count()) {
         return Err(PostMessageError::InvalidBody);
     }
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(sender)).await?;
     let counter = sqlx::query!("UPDATE channels SET next_message_seq = next_message_seq + 1 WHERE id = $1 AND organization_id = $2 RETURNING next_message_seq", channel_id.0, organization_id.0)
         .fetch_optional(&mut *tx).await?.ok_or(PostMessageError::NotFound)?;
     let inserted = sqlx::query_as!(StoredMessage, "INSERT INTO messages (id, organization_id, channel_id, channel_seq, sender_actor_id, body) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING RETURNING id, channel_id, channel_seq, sender_actor_id, body, created_at", id.as_uuid(), organization_id.0, channel_id.0, counter.next_message_seq, sender.0, body)
@@ -82,7 +83,7 @@ pub async fn post_message(
     // Release the counter and channel lock before looking up the committed retry.
     // A savepoint would keep that lock held during the lookup.
     tx.rollback().await?;
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(sender)).await?;
     sqlx::query!("SET TRANSACTION READ ONLY")
         .execute(&mut *tx)
         .await?;
@@ -110,12 +111,13 @@ async fn channel_exists(
 
 pub async fn messages_before(
     pool: &PgPool,
+    actor: ActorId,
     organization_id: OrganizationId,
     channel_id: ChannelId,
     before: Option<ChannelSeq>,
     limit: u16,
 ) -> Result<Vec<Message>, MessagesBeforeError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(actor)).await?;
     if !channel_exists(&mut tx, organization_id, channel_id).await? {
         return Err(MessagesBeforeError::NotFound);
     }
@@ -135,12 +137,13 @@ pub async fn messages_before(
 
 pub async fn messages_after(
     pool: &PgPool,
+    actor: ActorId,
     organization_id: OrganizationId,
     channel_id: ChannelId,
     after: ChannelSeq,
     limit: u16,
 ) -> Result<Vec<Message>, MessagesAfterError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(actor)).await?;
     if !channel_exists(&mut tx, organization_id, channel_id).await? {
         return Err(MessagesAfterError::NotFound);
     }

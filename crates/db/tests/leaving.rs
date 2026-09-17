@@ -23,16 +23,16 @@ async fn leaving_erases_personal_data_memberships_and_sessions_but_preserves_his
     .bind(Uuid::now_v7())
     .bind(actor.0)
     .bind(Uuid::now_v7().to_string())
-    .execute(&db.app)
+    .execute(&db.inspector)
     .await?;
     db::leave_service(&db.app, actor).await?;
     let retained: (Option<String>, bool) =
         sqlx::query_as("SELECT display_name, deleted_at IS NOT NULL FROM actors WHERE id = $1")
             .bind(actor.0)
-            .fetch_one(&db.app)
+            .fetch_one(&db.inspector)
             .await?;
     assert_eq!(retained, (None, true));
-    let personal: (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users WHERE actor_id = $1), (SELECT count(*) FROM sessions WHERE actor_id = $1)").bind(actor.0).fetch_one(&db.app).await?;
+    let personal: (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users WHERE actor_id = $1), (SELECT count(*) FROM sessions WHERE actor_id = $1)").bind(actor.0).fetch_one(&db.inspector).await?;
     assert_eq!(personal, (0, 0));
     for (org, team) in organizations {
         assert_departed_membership(&db, org, actor).await?;
@@ -67,7 +67,7 @@ async fn leaving_erases_personal_data_memberships_and_sessions_but_preserves_his
                 &json!({"team_id":team,"reason":"left_service"})
             )
         );
-        let resolves: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events e JOIN actors a ON a.id = e.target_id WHERE e.organization_id = $1 AND e.target_type = 'actor' AND a.id = $2").bind(org.0).bind(actor.0).fetch_one(&db.owner).await?;
+        let resolves: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events e JOIN actors a ON a.id = e.target_id WHERE e.organization_id = $1 AND e.target_type = 'actor' AND a.id = $2").bind(org.0).bind(actor.0).fetch_one(&db.inspector).await?;
         assert!(resolves > 0);
     }
     assert!(matches!(
@@ -78,16 +78,16 @@ async fn leaving_erases_personal_data_memberships_and_sessions_but_preserves_his
 }
 
 async fn assert_departed_membership(db: &Database, org: OrganizationId, actor: ActorId) -> Result {
-    let row: (String, Option<String>) = sqlx::query_as("SELECT status, display_name FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.app).await?;
+    let row: (String, Option<String>) = sqlx::query_as("SELECT status, display_name FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.inspector).await?;
     assert_eq!(row, ("left".into(), None));
-    let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM organization_members WHERE organization_id = $1 AND actor_id = $2 AND status = 'active')").bind(org.0).bind(actor.0).fetch_one(&db.app).await?;
+    let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM organization_members WHERE organization_id = $1 AND actor_id = $2 AND status = 'active')").bind(org.0).bind(actor.0).fetch_one(&db.inspector).await?;
     assert!(!active);
     let teams: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM team_members WHERE organization_id = $1 AND actor_id = $2",
     )
     .bind(org.0)
     .bind(actor.0)
-    .fetch_one(&db.app)
+    .fetch_one(&db.inspector)
     .await?;
     assert_eq!(teams, 0);
     Ok(())
@@ -99,12 +99,12 @@ async fn leaving_without_organizations_writes_no_audit() -> Result {
     let actor = db.person().await?;
     db::leave_service(&db.app, actor).await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events")
-        .fetch_one(&db.owner)
+        .fetch_one(&db.inspector)
         .await?;
     assert_eq!(count, 0);
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE actor_id = $1)")
         .bind(actor.0)
-        .fetch_one(&db.app)
+        .fetch_one(&db.inspector)
         .await?;
     assert!(!exists);
     db.finish().await
@@ -117,7 +117,7 @@ async fn already_left_membership_is_cleared_without_duplicate_audit() -> Result 
     let actor = db.person().await?;
     let org = db.organization(owner).await?;
     db.member(org, actor, "member").await?;
-    sqlx::query("UPDATE organization_members SET status = 'left' WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).execute(&db.app).await?;
+    sqlx::query("UPDATE organization_members SET status = 'left' WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).execute(&db.inspector).await?;
     let before = db.audit(org).await?;
     db::leave_service(&db.app, actor).await?;
     assert_departed_membership(&db, org, actor).await?;
@@ -137,7 +137,7 @@ async fn last_owner_in_any_organization_rolls_back_the_whole_departure() -> Resu
     assert!(
         matches!(db::leave_service(&db.app, actor).await, Err(db::LeaveServiceError::LastOwner {organization_id}) if organization_id == last)
     );
-    let active: bool = sqlx::query_scalar("SELECT status = 'active' FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(first.0).bind(actor.0).fetch_one(&db.app).await?;
+    let active: bool = sqlx::query_scalar("SELECT status = 'active' FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(first.0).bind(actor.0).fetch_one(&db.inspector).await?;
     assert!(active);
     assert_eq!(db.audit(first).await?, before);
     db.finish().await
@@ -156,7 +156,7 @@ async fn departed_or_inactive_actors_cannot_gain_memberships() -> Result {
         db::add_team_member(&db.app, owner, org, team, actor, TeamRole::Member).await,
         Err(db::AddTeamMemberError::NotAnActiveMember)
     ));
-    sqlx::query("UPDATE organization_members SET status = 'left' WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).execute(&db.app).await?;
+    sqlx::query("UPDATE organization_members SET status = 'left' WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).execute(&db.inspector).await?;
     assert!(matches!(
         db::reactivate_member(&db.app, owner, org, actor).await,
         Err(db::ReactivateMemberError::NotSuspended)
@@ -186,7 +186,7 @@ async fn a_left_membership_cannot_change_role() -> Result {
     let org = db.organization(owner).await?;
     db.member(org, left, "member").await?;
     db.member(org, departed, "member").await?;
-    sqlx::query("UPDATE organization_members SET status = 'left' WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(left.0).execute(&db.app).await?;
+    sqlx::query("UPDATE organization_members SET status = 'left' WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(left.0).execute(&db.inspector).await?;
     db::leave_service(&db.app, departed).await?;
     let before = db.audit(org).await?;
     for actor in [left, departed] {
@@ -196,9 +196,73 @@ async fn a_left_membership_cannot_change_role() -> Result {
                 Err(db::ChangeMemberRoleError::NotFound)
             ));
         }
-        let membership: (String, String) = sqlx::query_as("SELECT role, status FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.app).await?;
+        let membership: (String, String) = sqlx::query_as("SELECT role, status FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.inspector).await?;
         assert_eq!(membership, ("member".into(), "left".into()));
     }
     assert_eq!(db.audit(org).await?, before);
+    db.finish().await
+}
+
+#[tokio::test]
+async fn departure_clears_active_suspended_and_left_memberships_with_exact_audits() -> Result {
+    let db = Database::new().await?;
+    let actor = db.person().await?;
+    let mut conversations = Vec::new();
+    for status in ["active", "suspended", "left"] {
+        let c = support::Conversation::new(&db).await?;
+        db.member(c.organization, actor, "admin").await?;
+        db::add_team_member(
+            &db.app,
+            c.owner,
+            c.organization,
+            c.team,
+            actor,
+            domain::TeamRole::Member,
+        )
+        .await?;
+        db::add_channel_member(&db.app, c.owner, c.organization, c.channel, actor).await?;
+        sqlx::query("UPDATE organization_members SET status = $3 WHERE organization_id = $1 AND actor_id = $2").bind(c.organization.0).bind(actor.0).bind(status).execute(&db.inspector).await?;
+        conversations.push((c, status));
+    }
+    db::leave_service(&db.app, actor).await?;
+    for (c, old_status) in conversations {
+        let (status, role, name): (String, String, Option<String>) = sqlx::query_as("SELECT status, role, display_name FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(c.organization.0).bind(actor.0).fetch_one(&db.inspector).await?;
+        assert_eq!(
+            (status.as_str(), role.as_str(), name),
+            ("left", "admin", None)
+        );
+        let counts: (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM team_members WHERE organization_id = $1 AND actor_id = $2), (SELECT count(*) FROM channel_members WHERE organization_id = $1 AND actor_id = $2)").bind(c.organization.0).bind(actor.0).fetch_one(&db.inspector).await?;
+        assert_eq!(counts, (0, 0));
+        let events: Vec<_> = db
+            .audit(c.organization)
+            .await?
+            .into_iter()
+            .filter(|e| e.actor == actor.0)
+            .collect();
+        let mut expected = vec![support::Audit {
+            actor: actor.0,
+            action: "channel.member.removed".into(),
+            target_type: "actor".into(),
+            target: actor.0,
+            metadata: serde_json::json!({"channel_id": c.channel, "reason": "left_service"}),
+        }];
+        if old_status != "left" {
+            expected.push(support::Audit {
+                actor: actor.0,
+                action: "organization.member.left".into(),
+                target_type: "actor".into(),
+                target: actor.0,
+                metadata: serde_json::json!({}),
+            });
+        }
+        expected.push(support::Audit {
+            actor: actor.0,
+            action: "team.member.removed".into(),
+            target_type: "actor".into(),
+            target: actor.0,
+            metadata: serde_json::json!({"team_id": c.team, "reason": "left_service"}),
+        });
+        assert_eq!(events, expected);
+    }
     db.finish().await
 }

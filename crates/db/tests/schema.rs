@@ -82,6 +82,7 @@ async fn composite_foreign_keys_cannot_be_disabled_by_nulls() -> Result {
         [
             ("channel_members", "channel_id"),
             ("channel_members", "channel_scope"),
+            ("channel_members", "organization_id"),
             ("channels", "organization_id"),
             ("channels", "team_id"),
             ("invites", "organization_id"),
@@ -185,7 +186,7 @@ async fn partial_and_invalid_indexes_do_not_serve_a_foreign_key() -> Result {
             .bind(Uuid::now_v7())
             .bind(actor.0)
             .bind(Uuid::now_v7().to_string())
-            .execute(&db.app)
+            .execute(&db.inspector)
             .await?;
     }
     assert!(

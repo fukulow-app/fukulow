@@ -8,7 +8,7 @@ async fn migrations_reverse_empty_and_populated_databases() -> Result {
     for populated in [false, true] {
         if populated {
             sqlx::raw_sql(include_str!("fixtures/populated.sql"))
-                .execute(&db.app)
+                .execute(&db.inspector)
                 .await?;
         }
         migrator.undo(&db.owner, 202609170001).await?;

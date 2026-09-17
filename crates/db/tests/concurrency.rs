@@ -29,7 +29,7 @@ async fn concurrent_demotions_leave_exactly_one_owner() -> Result {
         let second = db.person().await?;
         let org = db.organization(first).await?;
         db.member(org, second, "owner").await?;
-        let mut blocker = db.owner.begin().await?;
+        let mut blocker = db.inspector.begin().await?;
         sqlx::query("SELECT id FROM organizations WHERE id = $1 FOR UPDATE")
             .bind(org.0)
             .fetch_one(&mut *blocker)
@@ -57,7 +57,7 @@ async fn concurrent_demotions_leave_exactly_one_owner() -> Result {
             }
         }
         assert_eq!(successes, 1);
-        assert_eq!(active_owners(&db.app, org).await?, 1);
+        assert_eq!(active_owners(&db.inspector, org).await?, 1);
     }
     db.finish().await
 }
@@ -72,7 +72,7 @@ async fn concurrent_leavers_lock_shared_organizations_in_order_without_deadlocks
         let b = db.organization(second).await?;
         db.member(a, second, "owner").await?;
         db.member(b, first, "owner").await?;
-        let mut blocker = db.owner.begin().await?;
+        let mut blocker = db.inspector.begin().await?;
         sqlx::query("SELECT id FROM organizations WHERE id = $1 FOR UPDATE")
             .bind(a.min(b).0)
             .fetch_one(&mut *blocker)
@@ -99,8 +99,8 @@ async fn concurrent_leavers_lock_shared_organizations_in_order_without_deadlocks
             }
         }
         assert_eq!(successes, 1);
-        assert_eq!(active_owners(&db.app, a).await?, 1);
-        assert_eq!(active_owners(&db.app, b).await?, 1);
+        assert_eq!(active_owners(&db.inspector, a).await?, 1);
+        assert_eq!(active_owners(&db.inspector, b).await?, 1);
     }
     db.finish().await
 }
@@ -110,7 +110,7 @@ async fn creating_an_organization_and_leaving_cannot_resurrect_an_actor() -> Res
     let db = Database::new().await?;
     for _ in 0..20 {
         let actor = db.person().await?;
-        let mut blocker = db.owner.begin().await?;
+        let mut blocker = db.inspector.begin().await?;
         sqlx::query("SELECT id FROM actors WHERE id = $1 FOR UPDATE")
             .bind(actor.0)
             .fetch_one(&mut *blocker)
@@ -134,7 +134,7 @@ async fn creating_an_organization_and_leaving_cannot_resurrect_an_actor() -> Res
             _ => panic!("exactly the operation committing second must be refused"),
         }
         let resurrected: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM organizations o JOIN organization_members m ON m.organization_id = o.id JOIN actors a ON a.id = m.actor_id WHERE a.id = $1 AND a.deleted_at IS NOT NULL AND m.status = 'active')")
-            .bind(actor.0).fetch_one(&db.app).await?;
+            .bind(actor.0).fetch_one(&db.inspector).await?;
         assert!(!resurrected);
     }
     db.finish().await
@@ -165,7 +165,7 @@ async fn reactivation_waits_for_actor_departure_and_refuses_it() -> Result {
     let org = db.organization(owner).await?;
     db.member(org, actor, "member").await?;
     db::suspend_member(&db.app, owner, org, actor).await?;
-    let mut leaver = db.app.begin().await?;
+    let mut leaver = db.actor(actor).await?;
     sqlx::query("SELECT id FROM actors WHERE id = $1 FOR UPDATE")
         .bind(actor.0)
         .fetch_one(&mut *leaver)
@@ -188,7 +188,7 @@ async fn reactivation_waits_for_actor_departure_and_refuses_it() -> Result {
     )
     .bind(org.0)
     .bind(actor.0)
-    .fetch_one(&db.app)
+    .fetch_one(&db.inspector)
     .await?;
     assert_eq!(status, "left");
     db.finish().await
@@ -203,7 +203,7 @@ async fn audit_performer_is_locked_before_the_organization() -> Result {
     let org = db.organization(owner).await?;
     db.member(org, performer, "member").await?;
     db.member(org, member, "member").await?;
-    let mut departure = db.app.begin().await?;
+    let mut departure = db.actor(performer).await?;
     sqlx::query("SELECT id FROM actors WHERE id = $1 FOR UPDATE")
         .bind(performer.0)
         .fetch_one(&mut *departure)
@@ -221,5 +221,53 @@ async fn audit_performer_is_locked_before_the_organization() -> Result {
         .await?;
     departure.commit().await?;
     mutation.await??;
+    db.finish().await
+}
+
+#[tokio::test]
+async fn a_role_change_waiting_on_a_departure_sees_the_membership_as_left() -> Result {
+    let db = Database::new().await?;
+    let owner = db.person().await?;
+    let actor = db.person().await?;
+    let org = db.organization(owner).await?;
+    db.member(org, actor, "member").await?;
+    db::suspend_member(&db.app, owner, org, actor).await?;
+    // Leaving does not lock an organization where the membership is inactive. What orders the
+    // two is that the departure audit's foreign key takes KEY SHARE on the organization, which
+    // conflicts with change_member_role's FOR UPDATE, so the role change reads only after the
+    // departure commits. Holding the membership row lines both up, the departure first.
+    let mut blocker = db.inspector.begin().await?;
+    sqlx::query("SELECT 1 FROM organization_members WHERE organization_id = $1 AND actor_id = $2 FOR UPDATE")
+        .bind(org.0)
+        .bind(actor.0)
+        .fetch_one(&mut *blocker)
+        .await?;
+    let pool = db.app.clone();
+    let leave = tokio::spawn(async move { db::leave_service(&pool, actor).await });
+    wait_for_blocked_operations(&db.owner, 1).await?;
+    let pool = db.app.clone();
+    let change = tokio::spawn(async move {
+        db::change_member_role(&pool, owner, org, actor, OrganizationRole::Admin).await
+    });
+    wait_for_blocked_operations(&db.owner, 2).await?;
+    blocker.commit().await?;
+    leave.await??;
+    assert!(matches!(
+        change.await?,
+        Err(db::ChangeMemberRoleError::NotFound)
+    ));
+    let row: (String, String) = sqlx::query_as(
+        "SELECT role, status FROM organization_members WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(org.0)
+    .bind(actor.0)
+    .fetch_one(&db.inspector)
+    .await?;
+    assert_eq!(row, ("member".into(), "left".into()));
+    let changes: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE organization_id = $1 AND action = 'organization.member.role_changed'")
+        .bind(org.0)
+        .fetch_one(&db.inspector)
+        .await?;
+    assert_eq!(changes, 0);
     db.finish().await
 }

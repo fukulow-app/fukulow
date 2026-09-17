@@ -3,6 +3,7 @@ use super::{
     lock_organization,
 };
 use crate::audit::Event;
+use crate::context::{Context, begin};
 use domain::{ActorId, OrganizationId, OrganizationRole, OwnerChange, check_owner_change};
 use sqlx::{PgConnection, PgPool};
 
@@ -35,7 +36,7 @@ pub async fn change_member_role(
     actor_id: ActorId,
     role: OrganizationRole,
 ) -> Result<(), ChangeMemberRoleError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(ChangeMemberRoleError::NotFound);
@@ -80,7 +81,7 @@ pub async fn suspend_member(
     organization_id: OrganizationId,
     actor_id: ActorId,
 ) -> Result<(), SuspendMemberError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(SuspendMemberError::NotFound);
@@ -112,7 +113,7 @@ pub async fn reactivate_member(
     organization_id: OrganizationId,
     actor_id: ActorId,
 ) -> Result<(), ReactivateMemberError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     let departed = lock_actor(&mut tx, actor_id, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(ReactivateMemberError::NotFound);

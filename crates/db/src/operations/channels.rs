@@ -2,6 +2,7 @@ use super::{
     AddChannelMemberError, CreateChannelError, errors::constraint, lock_actor, lock_organization,
 };
 use crate::audit::Event;
+use crate::context::{Context, begin};
 use domain::{ActorId, ChannelId, ChannelScope, OrganizationId};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -13,7 +14,7 @@ pub async fn create_channel(
     scope: ChannelScope,
     name: &str,
 ) -> Result<ChannelId, CreateChannelError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(CreateChannelError::NotFound);
@@ -56,7 +57,7 @@ pub async fn add_channel_member(
     channel_id: ChannelId,
     actor_id: ActorId,
 ) -> Result<(), AddChannelMemberError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     let departed = lock_actor(&mut tx, actor_id, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(AddChannelMemberError::NotFound);
@@ -73,11 +74,11 @@ pub async fn add_channel_member(
         return Err(AddChannelMemberError::OrganizationScoped);
     }
     match departed {
-        None => return Err(AddChannelMemberError::ActorNotFound),
+        None => return Err(AddChannelMemberError::NotFound),
         Some(true) => return Err(AddChannelMemberError::ActorDeparted),
         Some(false) => {}
     }
-    sqlx::query!("INSERT INTO channel_members (channel_id, channel_scope, actor_id) SELECT id, scope, $3 FROM channels WHERE organization_id = $1 AND id = $2", organization_id.0, channel_id.0, actor_id.0)
+    sqlx::query!("INSERT INTO channel_members (channel_id, channel_scope, organization_id, actor_id) SELECT id, scope, organization_id, $3 FROM channels WHERE organization_id = $1 AND id = $2", organization_id.0, channel_id.0, actor_id.0)
         .execute(&mut *tx).await.map_err(|error| {
             if constraint(&error, "channel_members_pkey") { AddChannelMemberError::AlreadyMember } else { error.into() }
         })?;

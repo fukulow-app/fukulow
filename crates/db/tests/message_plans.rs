@@ -8,13 +8,13 @@ async fn history_plans_walk_sequence_index_and_stop_at_limit() -> Result {
     let c = Conversation::new(&db).await?;
     let ids: Vec<_> = (0..100_000).map(|_| Uuid::now_v7()).collect();
     sqlx::query("INSERT INTO messages (id, organization_id, channel_id, channel_seq, sender_actor_id, body) SELECT id, $1, $2, seq, $3, 'Fixture body' FROM unnest($4::uuid[]) WITH ORDINALITY AS rows(id, seq)")
-        .bind(c.organization.0).bind(c.channel.0).bind(c.owner.0).bind(ids).execute(&db.app).await?;
+        .bind(c.organization.0).bind(c.channel.0).bind(c.owner.0).bind(ids).execute(&db.inspector).await?;
     sqlx::query(
         "UPDATE channels SET next_message_seq = 100000 WHERE organization_id = $1 AND id = $2",
     )
     .bind(c.organization.0)
     .bind(c.channel.0)
-    .execute(&db.app)
+    .execute(&db.inspector)
     .await?;
     sqlx::query("ANALYZE messages").execute(&db.owner).await?;
     // Read the exact production literals so a query change cannot leave this evidence stale.
@@ -25,7 +25,7 @@ async fn history_plans_walk_sequence_index_and_stop_at_limit() -> Result {
         .collect();
     assert_eq!(queries.len(), 3);
     for query in queries {
-        let mut connection = db.app.acquire().await?;
+        let mut connection = db.actor(c.owner).await?;
         // EXPLAIN cannot be bound around a statement. Only these source-owned, static literals are accepted.
         let explain = match query {
             "SELECT id, channel_id, channel_seq, sender_actor_id, body, created_at FROM messages WHERE organization_id = $1 AND channel_id = $2 AND channel_seq < $3 ORDER BY channel_seq DESC LIMIT $4" => {

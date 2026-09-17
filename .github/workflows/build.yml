@@ -40,5 +40,7 @@ jobs:
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo build --locked --workspace
       - run: cargo test --locked --workspace --no-run
-      - run: cargo test --locked --workspace --lib
+      # db's unit tests need PostgreSQL (they reach crate-private transaction setup), so
+      # the database job runs them with the rest of `cargo test --all`.
+      - run: cargo test --locked --workspace --lib --exclude db
       - run: cargo test --locked -p domain --test owners

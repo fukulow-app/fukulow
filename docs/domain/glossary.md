@@ -30,7 +30,7 @@ will use this.
 | **user** | **A person's details** — the personal data (email address, password) of one human actor, keyed by the actor. Only a person has one, and only a person can hold a login session. Deleted when the person leaves the service; the actor stays |
 | **entry point** | REST, webhook or WebSocket: a way in, not an actor. Every credential resolves to an actor |
 | **organization member** | An actor's membership of one organization. Carries the role, the status and an optional display name for that organization |
-| **status** | `active`, `suspended` or `left`. **A security rule, not a label** — row security only admits `active` members |
+| **status** | `active`, `suspended` or `left`. **A security rule, not a label** — ordinary organization data is visible only to `active` members; inactive actors can reach their own listings for departure |
 | **display name** | Always the current one. Held in exactly two places: `actors.display_name`, and an optional per-organization override in `organization_members`. Past messages show the name as it is now |
 | **leaving the service** | Every **organization** membership of the actor becomes `left` and its team and channel memberships are deleted; the person's `users` row and sessions are deleted; their display names are cleared, and the actor stays with `deleted_at` set — so past messages keep their author. Refused for the last active owner of an organization |
 
@@ -40,6 +40,7 @@ will use this.
 |---|---|
 | **scope** | Which container owns a channel: `organization` or `team`. An organization-scoped channel belongs to no team — a company-wide notice lives there |
 | **implicit membership** | Every active member of an organization can see its organization-scoped channels **without being listed in them**. Joining the organization is joining those channels |
+| **`channel_members.organization_id`** | The channel's organization, held redundantly and enforced by a composite foreign key to `channels`. Neither the actor's organization nor evidence of organization membership |
 | **cross-organization member** | An actor in a channel that is not a member of the channel's organization. Allowed by design, and the reason channel access is not decided by organization membership |
 | **`channel_seq`** | A message's position in its channel, assigned by the server. **The ordering key and the cursor.** A message's `id` is not |
 | **message id** | Chosen by the client (UUIDv7), so a message can be drawn before it is stored and a retry does not create a duplicate. **Identity only — never used to order** |
@@ -70,5 +71,5 @@ Every table is in exactly one class, and a new table says which.
 |---|---|---|
 | **tenant-owned** | Belongs to one organization; carries `organization_id`. **`organizations` is the root: it is the tenant, and its own `id` is the value others carry** | Policy derived from membership |
 | **cross-tenant** | Links an organization's resource to actors who may be outside it | Policy, not a simple comparison |
-| **global** | Belongs to no organization | Cannot be scoped by organization |
+| **global** | Belongs to no organization | Self and anyone holding a membership in the acting actor's active organizations (actors), or the single presented credential match (users and sessions) |
 | **internal** | Bookkeeping, such as the migration table | None; the application has no access |
