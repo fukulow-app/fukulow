@@ -137,15 +137,28 @@ membership; **identity lookups that have no tenant context**, such as signing in
 email or an actor that has left every organization, do not need one. PostgreSQL row level security sits underneath as the wall that holds
 when something reaches the tables another way.
 
-- The application sets **only** the acting actor's id, `fukulow.actor_id`, per
-  transaction, with `SET LOCAL`. **Which organizations that actor may see is derived
-  by the database** from its organization memberships. Letting the application declare the
-  organization would trust it exactly as much as the `WHERE` clause already does
-- **With no actor set, no rows are visible.** Forgetting to set it produces an empty
-  result, not another organization's data
+- The application sets the acting actor's id, `fukulow.actor_id`, or the credential
+  the request presented: `fukulow.session_token_hash`, `fukulow.sign_in_email`, or
+  `fukulow.invite_token_hash`. Every setting uses `set_config(..., true)` inside
+  the transaction. **No setting names an organization**; the database derives
+  the actor's active organizations from membership rows
+- **With no actor or credential set, no rows are visible.** Global `actors` admits
+  self and every actor with a membership, of any status, in the acting actor's active organizations; `users` admits self or the one ASCII-case-insensitive
+  sign-in email match; `sessions` admits self or the one token-hash match.
+  `invites` also admits the one presented invite hash. Invite acceptance creates
+  an actor and sets its id before inserting the user and invited membership
+- Inactive actors can reach their own organization, team and channel membership
+  rows for departure, without seeing anyone else's rows. Audits and listing
+  removals precede all status transitions. Their own inactive organization
+  membership can only become `left` with its display name cleared and role unchanged
+- **Passing row security is not permission.** Policies decide visibility;
+  `can(actor, Capability)` decides what may be done before an operation runs
 - The application role cannot bypass row security: it does not own the tables,
-  is not a superuser, and has no `BYPASSRLS`. A superuser always bypasses policies,
-  and an owner does unless `FORCE` is set — so the application connects as neither
+  is not a superuser, and has no `BYPASSRLS`. Every application table, including
+  globals, has ENABLE and FORCE. Exactly two hardened definer functions read
+  memberships as the migrator to avoid recursive policies; the application
+  cannot assume that role. The test-only inspector bypasses FORCE, and the
+  application refuses startup when `INSPECTOR_DATABASE_URL` is set
 
 **Members from outside the organization cannot read through row security yet.**
 The model admits them to team channels; the policies are derived from organization
@@ -165,5 +178,3 @@ The enforcement details and how each is tested are in
 - Who may post to an organization-scoped channel — this belongs to the channel
   (`everyone` or administrators only), not to a job title, and is not built yet
 - How connections between organizations are requested and approved
-- How actors and users are protected by row security — they belong to no organization, so the
-  organization-based policy does not apply. Decided and measured in #10

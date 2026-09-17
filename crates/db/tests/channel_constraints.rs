@@ -11,7 +11,7 @@ async fn insert_channel(
     name: &str,
 ) -> std::result::Result<Uuid, sqlx::Error> {
     sqlx::query_scalar("INSERT INTO channels (id, organization_id, team_id, scope, name) VALUES ($1, $2, $3, $4, $5) RETURNING id")
-        .bind(Uuid::now_v7()).bind(org.0).bind(team.map(|id| id.0)).bind(scope).bind(name).fetch_one(&db.app).await
+        .bind(Uuid::now_v7()).bind(org.0).bind(team.map(|id| id.0)).bind(scope).bind(name).fetch_one(&db.inspector).await
 }
 
 #[tokio::test]
@@ -36,14 +36,14 @@ async fn channel_scope_requires_exactly_its_owner_and_match_simple_skips_null_te
     )
     .bind(c.organization.0)
     .bind(id)
-    .fetch_one(&db.app)
+    .fetch_one(&db.inspector)
     .await?;
     assert_eq!(counter, 0);
     let match_type: String = sqlx::query_scalar("SELECT confmatchtype::text FROM pg_constraint WHERE conrelid = 'channels'::regclass AND confrelid = 'teams'::regclass").fetch_one(&db.owner).await?;
     assert_eq!(match_type, "s");
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channels WHERE organization_id = $1")
         .bind(c.organization.0)
-        .fetch_one(&db.app)
+        .fetch_one(&db.inspector)
         .await?;
     assert_eq!(count, 2);
     db.finish().await
@@ -71,7 +71,7 @@ async fn channel_team_must_belong_to_its_organization() -> Result {
     );
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channels WHERE organization_id = $1")
         .bind(a.organization.0)
-        .fetch_one(&db.app)
+        .fetch_one(&db.inspector)
         .await?;
     assert_eq!(count, 1);
     db.finish().await
@@ -151,9 +151,9 @@ async fn implicit_channels_cannot_list_members_even_with_a_forged_or_null_scope(
         (Some("organization"), "23514"),
         (None, "23502"),
     ] {
-        rejected(sqlx::query("INSERT INTO channel_members (channel_id, channel_scope, actor_id) VALUES ($1, $2, $3)").bind(id.0).bind(scope).bind(c.owner.0).execute(&db.app).await, code);
+        rejected(sqlx::query("INSERT INTO channel_members (channel_id, channel_scope, actor_id, organization_id) VALUES ($1, $2, $3, $4)").bind(id.0).bind(scope).bind(c.owner.0).bind(c.organization.0).execute(&db.inspector).await, code);
     }
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1").bind(c.organization.0).fetch_one(&db.app).await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1").bind(c.organization.0).fetch_one(&db.inspector).await?;
     assert_eq!(count, 0);
     db.finish().await
 }
@@ -167,7 +167,7 @@ async fn insert_message(
     body: &str,
 ) -> std::result::Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO messages (id, organization_id, channel_id, sender_actor_id, channel_seq, body) VALUES ($1, $2, $3, $4, $5, $6)")
-        .bind(Uuid::now_v7()).bind(org.0).bind(channel).bind(sender.map(|id| id.0)).bind(seq).bind(body).execute(&db.app).await?;
+        .bind(Uuid::now_v7()).bind(org.0).bind(channel).bind(sender.map(|id| id.0)).bind(seq).bind(body).execute(&db.inspector).await?;
     Ok(())
 }
 
@@ -205,7 +205,7 @@ async fn message_foreign_keys_and_sender_nullability_refuse_invalid_rows() -> Re
         .await,
         "23503",
     );
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE organization_id = $1 OR organization_id = $2 OR organization_id = $3").bind(a.organization.0).bind(b.organization.0).bind(missing.0).fetch_one(&db.app).await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE organization_id = $1 OR organization_id = $2 OR organization_id = $3").bind(a.organization.0).bind(b.organization.0).bind(missing.0).fetch_one(&db.inspector).await?;
     assert_eq!(count, 0);
     db.finish().await
 }
@@ -251,9 +251,65 @@ async fn message_body_and_sequence_constraints_are_backstops() -> Result {
         )
         .bind(c.organization.0)
         .bind(c.channel.0)
-        .execute(&db.app)
+        .execute(&db.inspector)
         .await,
         "23514",
     );
+    db.finish().await
+}
+
+#[tokio::test]
+async fn channel_listing_copies_its_channel_organization_even_for_an_outside_actor() -> Result {
+    let db = Database::new().await?;
+    let a = Conversation::new(&db).await?;
+    let b = Conversation::new(&db).await?;
+    let stored: Uuid = sqlx::query_scalar("INSERT INTO channel_members (channel_id, channel_scope, organization_id, actor_id) VALUES ($1, 'team', $2, $3) RETURNING organization_id")
+        .bind(a.channel.0).bind(a.organization.0).bind(b.owner.0).fetch_one(&db.inspector).await?;
+    assert_eq!(stored, a.organization.0);
+    let mut tx = db.actor(a.owner).await?;
+    rejected(sqlx::query("UPDATE channel_members SET organization_id = $1 WHERE channel_id = $2 AND organization_id = $3").bind(b.organization.0).bind(a.channel.0).bind(a.organization.0).execute(&mut *tx).await, "42501");
+    tx.rollback().await?;
+    db.finish().await
+}
+
+#[tokio::test]
+async fn channel_listing_organization_scope_and_null_guards_are_effective() -> Result {
+    let db = Database::new().await?;
+    let a = Conversation::new(&db).await?;
+    let b = Conversation::new(&db).await?;
+    let organization_channel = db::create_channel(
+        &db.app,
+        a.owner,
+        a.organization,
+        ChannelScope::Organization,
+        "implicit",
+    )
+    .await?;
+    for (channel, organization, code, remove) in [
+        (
+            a.channel.0,
+            Some(b.organization.0),
+            "23503",
+            "ALTER TABLE channel_members DROP CONSTRAINT channel_members_channel_organization_fkey",
+        ),
+        (
+            organization_channel.0,
+            Some(a.organization.0),
+            "23503",
+            "ALTER TABLE channel_members DROP CONSTRAINT channel_members_channel_organization_fkey",
+        ),
+        (
+            a.channel.0,
+            None,
+            "23502",
+            "ALTER TABLE channel_members ALTER COLUMN organization_id DROP NOT NULL",
+        ),
+    ] {
+        rejected(sqlx::query("INSERT INTO channel_members (channel_id, channel_scope, organization_id, actor_id) VALUES ($1, 'team', $2, $3)").bind(channel).bind(organization).bind(a.owner.0).execute(&db.inspector).await, code);
+        let mut tx = db.inspector.begin().await?;
+        sqlx::query(remove).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO channel_members (channel_id, channel_scope, organization_id, actor_id) VALUES ($1, 'team', $2, $3)").bind(channel).bind(organization).bind(a.owner.0).execute(&mut *tx).await?;
+        tx.rollback().await?;
+    }
     db.finish().await
 }

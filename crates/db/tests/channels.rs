@@ -69,17 +69,18 @@ async fn channel_creation_refuses_foreign_and_missing_owners_without_writes() ->
     assert_eq!(db.audit(a.organization).await?, before);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channels WHERE organization_id = $1")
         .bind(a.organization.0)
-        .fetch_one(&db.app)
+        .fetch_one(&db.inspector)
         .await?;
     assert_eq!(count, 1);
     db.finish().await
 }
 
 #[tokio::test]
-async fn outside_actor_can_join_and_only_success_is_audited() -> Result {
+async fn organization_member_can_join_and_only_success_is_audited() -> Result {
     let db = Database::new().await?;
     let c = Conversation::new(&db).await?;
     let outside = db.person().await?;
+    db.member(c.organization, outside, "member").await?;
     db::add_channel_member(&db.app, c.owner, c.organization, c.channel, outside).await?;
     assert!(matches!(
         db::add_channel_member(&db.app, c.owner, c.organization, c.channel, outside).await,
@@ -106,9 +107,10 @@ async fn outside_actor_can_join_and_only_success_is_audited() -> Result {
             ActorId(Uuid::now_v7())
         )
         .await,
-        Err(db::AddChannelMemberError::ActorNotFound)
+        Err(db::AddChannelMemberError::NotFound)
     ));
     let departed = db.person().await?;
+    db.member(c.organization, departed, "member").await?;
     db::leave_service(&db.app, departed).await?;
     assert!(matches!(
         db::add_channel_member(&db.app, c.owner, c.organization, c.channel, departed).await,
@@ -130,7 +132,7 @@ async fn outside_actor_can_join_and_only_success_is_audited() -> Result {
             metadata: json!({"channel_id": c.channel})
         }]
     );
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1").bind(c.organization.0).fetch_one(&db.app).await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1").bind(c.organization.0).fetch_one(&db.inspector).await?;
     assert_eq!(count, 1);
     db.finish().await
 }
@@ -148,19 +150,19 @@ async fn adding_channel_member_refuses_foreign_and_missing_channels_without_writ
         ));
     }
     assert_eq!(db.audit(a.organization).await?, before);
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 OR c.organization_id = $2").bind(a.organization.0).bind(b.organization.0).fetch_one(&db.app).await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 OR c.organization_id = $2").bind(a.organization.0).bind(b.organization.0).fetch_one(&db.inspector).await?;
     assert_eq!(count, 0);
     db.finish().await
 }
 
 #[tokio::test]
-async fn leaving_removes_internal_and_external_channels_and_audits_each_organization() -> Result {
+async fn leaving_removes_channels_and_audits_each_organization() -> Result {
     let db = Database::new().await?;
     let a = Conversation::new(&db).await?;
     let b = Conversation::new(&db).await?;
     let actor = db.person().await?;
-    db.member(a.organization, actor, "member").await?;
     for c in [&a, &b] {
+        db.member(c.organization, actor, "member").await?;
         db::add_channel_member(&db.app, c.owner, c.organization, c.channel, actor).await?;
     }
     db::leave_service(&db.app, actor).await?;
@@ -181,10 +183,11 @@ async fn leaving_removes_internal_and_external_channels_and_audits_each_organiza
                 metadata: json!({"channel_id": c.channel, "reason": "left_service"})
             }]
         );
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(c.organization.0).bind(actor.0).fetch_one(&db.app).await?;
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(c.organization.0).bind(actor.0).fetch_one(&db.inspector).await?;
         assert_eq!(count, 0);
     }
     let outsider = db.person().await?;
+    db.member(b.organization, outsider, "member").await?;
     db::add_channel_member(&db.app, b.owner, b.organization, b.channel, outsider).await?;
     db::leave_service(&db.app, outsider).await?;
     let records: Vec<_> = db
@@ -194,7 +197,7 @@ async fn leaving_removes_internal_and_external_channels_and_audits_each_organiza
         .filter(|a| a.action == "channel.member.removed" && a.target == outsider.0)
         .collect();
     assert_eq!(records.len(), 1);
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(b.organization.0).bind(outsider.0).fetch_one(&db.app).await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(b.organization.0).bind(outsider.0).fetch_one(&db.inspector).await?;
     assert_eq!(count, 0);
     db.finish().await
 }
@@ -204,6 +207,7 @@ async fn channel_mutations_roll_back_when_audit_insert_fails() -> Result {
     let db = Database::new().await?;
     let c = Conversation::new(&db).await?;
     let outside = db.person().await?;
+    db.member(c.organization, outside, "member").await?;
     db::add_channel_member(&db.app, c.owner, c.organization, c.channel, outside).await?;
     let before = db.audit(c.organization).await?;
     sqlx::query("REVOKE INSERT ON audit_events FROM fukulow_app")
@@ -231,10 +235,10 @@ async fn channel_mutations_roll_back_when_audit_insert_fails() -> Result {
     assert_eq!(db.audit(c.organization).await?, before);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channels WHERE organization_id = $1")
         .bind(c.organization.0)
-        .fetch_one(&db.app)
+        .fetch_one(&db.inspector)
         .await?;
     assert_eq!(count, 1);
-    let members: Vec<Uuid> = sqlx::query_scalar("SELECT m.actor_id FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1").bind(c.organization.0).fetch_all(&db.app).await?;
+    let members: Vec<Uuid> = sqlx::query_scalar("SELECT m.actor_id FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1").bind(c.organization.0).fetch_all(&db.inspector).await?;
     assert_eq!(members, [outside.0]);
     db.finish().await
 }

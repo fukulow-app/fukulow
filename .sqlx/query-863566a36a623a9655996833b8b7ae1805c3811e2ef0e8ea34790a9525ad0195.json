@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO channel_members (channel_id, channel_scope, organization_id, actor_id) SELECT id, scope, organization_id, $3 FROM channels WHERE organization_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "863566a36a623a9655996833b8b7ae1805c3811e2ef0e8ea34790a9525ad0195"
+}

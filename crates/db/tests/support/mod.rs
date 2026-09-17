@@ -15,6 +15,7 @@ pub(crate) const PASSWORD_HASH: &str = "fixture-password-hash";
 
 pub(crate) struct Database {
     pub(crate) owner: PgPool,
+    pub(crate) inspector: PgPool,
     pub(crate) app: PgPool,
     url: String,
 }
@@ -23,6 +24,11 @@ impl Database {
     pub(crate) async fn new() -> Result<Self> {
         let migrator_url = std::env::var("MIGRATOR_DATABASE_URL")
             .map_err(|_| "MIGRATOR_DATABASE_URL is required")?;
+        let inspector_url = std::env::var("INSPECTOR_DATABASE_URL")
+            .map_err(|_| "INSPECTOR_DATABASE_URL is required")?;
+        let inspector_options = PgConnectOptions::from_str(&inspector_url)
+            .map_err(|_| "invalid INSPECTOR_DATABASE_URL")?
+            .disable_statement_logging();
         let app_url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required")?;
         let database = format!("fukulow_test_{}", Uuid::now_v7().simple());
         let migrator = PgConnectOptions::from_str(&migrator_url)
@@ -40,6 +46,14 @@ impl Database {
         let owner = pool(migrator).await?;
         sqlx::migrate!("../../migrations").run(&owner).await?;
         let app = pool(application).await?;
+        let inspector = pool(inspector_options.database(&database)).await?;
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+            )
+            .fetch_one(&inspector)
+            .await?
+        );
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT current_user::text")
                 .fetch_one(&app)
@@ -52,25 +66,33 @@ impl Database {
                 .await?,
             "fukulow_migrator"
         );
-        Ok(Self { owner, app, url })
+        Ok(Self {
+            owner,
+            inspector,
+            app,
+            url,
+        })
     }
 
     pub(crate) async fn finish(self) -> Result {
         self.app.close().await;
         self.owner.close().await;
+        self.inspector.close().await;
         Postgres::drop_database(&self.url).await?;
         Ok(())
     }
 
     pub(crate) async fn person(&self) -> Result<ActorId> {
-        let mut conn = self.app.acquire().await?;
-        Ok(db::create_person(
+        let mut conn = self.app.begin().await?;
+        let actor = db::create_person(
             &mut conn,
             &format!("{}@example.invalid", Uuid::now_v7()),
             PASSWORD_HASH,
             "Fixture person",
         )
-        .await?)
+        .await?;
+        conn.commit().await?;
+        Ok(actor)
     }
 
     pub(crate) async fn organization(&self, actor: ActorId) -> Result<OrganizationId> {
@@ -90,13 +112,25 @@ impl Database {
         role: &str,
     ) -> Result {
         sqlx::query("INSERT INTO organization_members (organization_id, actor_id, role, display_name) VALUES ($1, $2, $3, 'Fixture override')")
-            .bind(organization.0).bind(actor.0).bind(role).execute(&self.app).await?;
+            .bind(organization.0).bind(actor.0).bind(role).execute(&self.inspector).await?;
         Ok(())
+    }
+
+    pub(crate) async fn actor(
+        &self,
+        actor: ActorId,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+        let mut tx = self.app.begin().await?;
+        sqlx::query("SELECT set_config('fukulow.actor_id', $1, true)")
+            .bind(actor.0.to_string())
+            .execute(&mut *tx)
+            .await?;
+        Ok(tx)
     }
 
     pub(crate) async fn audit(&self, organization: OrganizationId) -> Result<Vec<Audit>> {
         let rows = sqlx::query("SELECT actor_id, action, target_type, target_id, metadata FROM audit_events WHERE organization_id = $1 ORDER BY action, target_id")
-            .bind(organization.0).fetch_all(&self.owner).await?;
+            .bind(organization.0).fetch_all(&self.inspector).await?;
         rows.into_iter()
             .map(|row| {
                 Ok(Audit {
@@ -187,7 +221,7 @@ impl Conversation {
         )
         .bind(self.organization.0)
         .bind(self.channel.0)
-        .fetch_one(&db.app)
+        .fetch_one(&db.inspector)
         .await?)
     }
 

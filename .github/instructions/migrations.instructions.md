@@ -26,8 +26,10 @@ self-hoster has run it.
   `team_id`, `channel_id`, an invite target. The reference is composite,
   `(<parent key>, organization_id)`, against a parent with
   `UNIQUE (id, organization_id)`; otherwise the child can claim another
-  organization. **`channel_members` is exempt**: it is cross-tenant by design and
-  must not carry this constraint.
+  organization. **`channel_members` is cross-tenant**: it carries its channel's
+  `organization_id` through `(channel_id, channel_scope, organization_id) →
+  channels (id, scope, organization_id)`. It must not carry a foreign key to
+  `organization_members`: that would make listing an outside actor impossible.
 - **Flag** a nullable column in a composite foreign key, other than
   `channels.team_id` and `invites.target_team_id`. A NULL in any column makes the
   key unchecked under the default `MATCH SIMPLE`, and a `CHECK` passes on NULL — the
@@ -35,9 +37,16 @@ self-hoster has run it.
   the key is not checked when the column is NULL.
 - **Flag** an actor reference — `sender_actor_id`, `actor_id`,
   `created_by_actor_id` — that is not `NOT NULL`. A foreign key alone allows NULL.
-- **Flag** a new tenant-owned or cross-tenant table without both `ENABLE` and
-  `FORCE ROW LEVEL SECURITY` — **if any existing migration already enables row
-  security**. Before row security is introduced, tables have none by design.
+- **Flag** a new tenant-owned, cross-tenant or global table without both `ENABLE`
+  and `FORCE ROW LEVEL SECURITY`, or without a policy.
+- **Flag** a migration that reads or writes tenant rows without stating how it
+  handles `FORCE ROW LEVEL SECURITY`. The owner is subject to FORCE too: data
+  statements need `NO FORCE` and restoration of `FORCE` in the same transaction.
+  **Flag** any migration leaving FORCE off or adding a standing bypass.
+- **Flag** a `SECURITY DEFINER` function whose `search_path` does not end in
+  `pg_temp`, or that names a table without its schema. Temporary tables can shadow
+  real memberships. The only permitted definers are the two membership readers;
+  neither grants `PUBLIC EXECUTE`.
 
 ## Privileges
 

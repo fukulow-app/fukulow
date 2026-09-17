@@ -16,6 +16,11 @@ pub(crate) fn bind_address() -> Result<SocketAddr> {
 }
 
 pub(crate) fn database_url() -> Result<String> {
+    if env::var_os("INSPECTOR_DATABASE_URL").is_some() {
+        return Err(anyhow!(
+            "INSPECTOR_DATABASE_URL must not be set for the application"
+        ));
+    }
     env::var("DATABASE_URL")
         .map_err(|_| anyhow!("DATABASE_URL is required and must be valid Unicode"))
 }

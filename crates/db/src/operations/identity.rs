@@ -1,11 +1,12 @@
 use super::{CreateOrganizationError, CreatePersonError, errors::constraint, lock_actor};
 use crate::audit::Event;
+use crate::context::{Context, begin};
 use domain::{ActorId, OrganizationId, OrganizationRole};
-use sqlx::{Connection, PgConnection, PgPool};
+use sqlx::{Acquire, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 pub async fn create_person(
-    conn: &mut PgConnection,
+    conn: &mut Transaction<'_, Postgres>,
     email: &str,
     password_hash: &str,
     display_name: &str,
@@ -20,6 +21,7 @@ pub async fn create_person(
     )
     .execute(&mut *tx)
     .await?;
+    crate::context::set_context(&mut tx, Context::Actor(actor)).await?;
     sqlx::query!("INSERT INTO users (actor_id, actor_type, email, password_hash) VALUES ($1, 'human', $2, $3)", actor.0, email, password_hash)
         .execute(&mut *tx).await.map_err(|error| {
             if constraint(&error, "users_email_lower_key") { CreatePersonError::EmailTaken } else { error.into() }
@@ -34,7 +36,7 @@ pub async fn create_organization(
     name: &str,
     slug: &str,
 ) -> Result<OrganizationId, CreateOrganizationError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(creator)).await?;
     match lock_actor(&mut tx, creator, creator).await? {
         None => return Err(CreateOrganizationError::ActorNotFound),
         Some(true) => return Err(CreateOrganizationError::ActorDeparted),

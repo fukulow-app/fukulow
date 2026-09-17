@@ -10,7 +10,8 @@ async fn adding_members_concurrently_with_departure_never_leaves_a_membership() 
     let c = Conversation::new(&db).await?;
     for _ in 0..20 {
         let actor = db.person().await?;
-        let mut blocker = db.owner.begin().await?;
+        db.member(c.organization, actor, "member").await?;
+        let mut blocker = db.inspector.begin().await?;
         sqlx::query("SELECT id FROM actors WHERE id = $1 FOR UPDATE")
             .bind(actor.0)
             .fetch_one(&mut *blocker)
@@ -37,12 +38,12 @@ async fn adding_members_concurrently_with_departure_never_leaves_a_membership() 
             Err(error) => return Err(error.into()),
         }
         leave.await??;
-        let survivors: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.app).await?;
+        let survivors: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.inspector).await?;
         assert_eq!(survivors, 0);
         let departed: bool =
             sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM actors WHERE id = $1")
                 .bind(actor.0)
-                .fetch_one(&db.app)
+                .fetch_one(&db.inspector)
                 .await?;
         assert!(departed);
     }
@@ -54,7 +55,8 @@ async fn membership_addition_waits_for_departure_before_checking_actor() -> Resu
     let db = Database::new().await?;
     let c = Conversation::new(&db).await?;
     let actor = db.person().await?;
-    let mut departure = db.owner.begin().await?;
+    db.member(c.organization, actor, "member").await?;
+    let mut departure = db.inspector.begin().await?;
     sqlx::query("UPDATE actors SET deleted_at = now() WHERE id = $1")
         .bind(actor.0)
         .execute(&mut *departure)
@@ -71,7 +73,7 @@ async fn membership_addition_waits_for_departure_before_checking_actor() -> Resu
         add.await?,
         Err(db::AddChannelMemberError::ActorDeparted)
     ));
-    let survivors: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.app).await?;
+    let survivors: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(org.0).bind(actor.0).fetch_one(&db.inspector).await?;
     assert_eq!(survivors, 0);
     db.finish().await
 }
@@ -85,7 +87,7 @@ async fn concurrent_posts_are_consecutive_and_concurrent_retries_are_one_send() 
             let next = c.counter(&db).await? + 1;
             let first = message_id();
             let second = if same_id { first } else { message_id() };
-            let mut blocker = db.owner.begin().await?;
+            let mut blocker = db.inspector.begin().await?;
             sqlx::query(
                 "SELECT id FROM channels WHERE organization_id = $1 AND id = $2 FOR UPDATE",
             )
@@ -136,7 +138,7 @@ async fn concurrent_posts_are_consecutive_and_concurrent_retries_are_one_send() 
             )
             .bind(c.organization.0)
             .bind(c.channel.0)
-            .fetch_one(&db.app)
+            .fetch_one(&db.inspector)
             .await?;
             assert_eq!(count, c.counter(&db).await?);
         }

@@ -1,6 +1,6 @@
 mod support;
 use db::PostMessage;
-use domain::{ActorId, ChannelId, ChannelScope, ChannelSeq};
+use domain::{ChannelId, ChannelScope, ChannelSeq};
 use support::{Conversation, Database, Result, message_id};
 use uuid::Uuid;
 
@@ -31,7 +31,7 @@ async fn posting_refuses_foreign_and_missing_channels_without_consuming_a_number
     )
     .bind(a.organization.0)
     .bind(b.organization.0)
-    .fetch_one(&db.app)
+    .fetch_one(&db.inspector)
     .await?;
     assert_eq!(count, 0);
     assert_eq!(db.audit(a.organization).await?, before);
@@ -46,7 +46,7 @@ async fn messages_before_refuses_foreign_and_missing_channels() -> Result {
     b.post(&db).await?;
     for channel in [b.channel, ChannelId(Uuid::now_v7())] {
         assert!(matches!(
-            db::messages_before(&db.app, a.organization, channel, None, 100).await,
+            db::messages_before(&db.app, a.owner, a.organization, channel, None, 100).await,
             Err(db::MessagesBeforeError::NotFound)
         ));
     }
@@ -62,7 +62,15 @@ async fn messages_after_refuses_foreign_and_missing_channels() -> Result {
     b.post(&db).await?;
     for channel in [b.channel, ChannelId(Uuid::now_v7())] {
         assert!(matches!(
-            db::messages_after(&db.app, a.organization, channel, ChannelSeq::BEGINNING, 100).await,
+            db::messages_after(
+                &db.app,
+                a.owner,
+                a.organization,
+                channel,
+                ChannelSeq::BEGINNING,
+                100
+            )
+            .await,
             Err(db::MessagesAfterError::NotFound)
         ));
     }
@@ -83,13 +91,14 @@ async fn paging_is_exclusive_ordered_clamped_and_empty_at_both_ends() -> Result 
     let c = Conversation::new(&db).await?;
     let audit = db.audit(c.organization).await?;
     assert!(
-        db::messages_before(&db.app, c.organization, c.channel, None, 100)
+        db::messages_before(&db.app, c.owner, c.organization, c.channel, None, 100)
             .await?
             .is_empty()
     );
     assert!(
         db::messages_after(
             &db.app,
+            c.owner,
             c.organization,
             c.channel,
             ChannelSeq::BEGINNING,
@@ -109,6 +118,7 @@ async fn paging_is_exclusive_ordered_clamped_and_empty_at_both_ends() -> Result 
     ] {
         let page = db::messages_before(
             &db.app,
+            c.owner,
             c.organization,
             c.channel,
             before.map(|n| ChannelSeq::new(n).unwrap()),
@@ -123,13 +133,15 @@ async fn paging_is_exclusive_ordered_clamped_and_empty_at_both_ends() -> Result 
         (ChannelSeq::new(250)?, vec![]),
     ] {
         assert_eq!(
-            sequences(db::messages_after(&db.app, c.organization, c.channel, after, 100).await?),
+            sequences(
+                db::messages_after(&db.app, c.owner, c.organization, c.channel, after, 100).await?
+            ),
             expected
         );
     }
     for (limit, expected) in [(0, 1), (500, 200)] {
         assert_eq!(
-            db::messages_before(&db.app, c.organization, c.channel, None, limit)
+            db::messages_before(&db.app, c.owner, c.organization, c.channel, None, limit)
                 .await?
                 .len(),
             expected
@@ -137,6 +149,7 @@ async fn paging_is_exclusive_ordered_clamped_and_empty_at_both_ends() -> Result 
         assert_eq!(
             db::messages_after(
                 &db.app,
+                c.owner,
                 c.organization,
                 c.channel,
                 ChannelSeq::BEGINNING,
@@ -155,12 +168,15 @@ async fn paging_is_exclusive_ordered_clamped_and_empty_at_both_ends() -> Result 
 async fn failed_insert_rolls_back_the_counter() -> Result {
     let db = Database::new().await?;
     let c = Conversation::new(&db).await?;
+    sqlx::query("ALTER TABLE messages ADD CONSTRAINT reject_message CHECK (false) NOT VALID")
+        .execute(&db.owner)
+        .await?;
     assert!(matches!(
         db::post_message(
             &db.app,
             c.organization,
             c.channel,
-            ActorId(Uuid::now_v7()),
+            c.owner,
             message_id(),
             "body"
         )
@@ -168,6 +184,9 @@ async fn failed_insert_rolls_back_the_counter() -> Result {
         Err(db::PostMessageError::Database(_))
     ));
     assert_eq!(c.counter(&db).await?, 0);
+    sqlx::query("ALTER TABLE messages DROP CONSTRAINT reject_message")
+        .execute(&db.owner)
+        .await?;
     assert_eq!(c.post(&db).await?.channel_seq.get(), 1);
     db.finish().await
 }
@@ -190,7 +209,7 @@ async fn retry_returns_stored_message_and_does_not_consume_a_number() -> Result 
     assert_eq!(c.counter(&db).await?, 1);
     assert_eq!(c.post(&db).await?.channel_seq.get(), 2);
     assert_eq!(
-        db::messages_before(&db.app, c.organization, c.channel, None, 100)
+        db::messages_before(&db.app, c.owner, c.organization, c.channel, None, 100)
             .await?
             .len(),
         2
@@ -203,6 +222,7 @@ async fn id_conflicts_do_not_disclose_another_sender_channel_or_organization() -
     let db = Database::new().await?;
     let a = Conversation::new(&db).await?;
     let b = Conversation::new(&db).await?;
+    db.member(a.organization, b.owner, "member").await?;
     let original = a.post(&db).await?;
     let other = db::create_channel(
         &db.app,
@@ -215,7 +235,7 @@ async fn id_conflicts_do_not_disclose_another_sender_channel_or_organization() -
     for (org, channel, sender) in [
         (a.organization, a.channel, b.owner),
         (a.organization, other, a.owner),
-        (b.organization, b.channel, a.owner),
+        (b.organization, b.channel, b.owner),
     ] {
         let error = db::post_message(&db.app, org, channel, sender, original.id, "different")
             .await
@@ -226,7 +246,7 @@ async fn id_conflicts_do_not_disclose_another_sender_channel_or_organization() -
     assert_eq!(a.counter(&db).await?, 1);
     assert_eq!(b.counter(&db).await?, 0);
     assert!(
-        db::messages_before(&db.app, a.organization, other, None, 100)
+        db::messages_before(&db.app, a.owner, a.organization, other, None, 100)
             .await?
             .is_empty()
     );

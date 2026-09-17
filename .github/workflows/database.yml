@@ -32,6 +32,8 @@ jobs:
       DATABASE_URL: postgres://fukulow_app:fukulow_app@127.0.0.1:15432/fukulow_dev
       # DDL and isolated test database creation only. gitleaks:allow
       MIGRATOR_DATABASE_URL: postgres://fukulow_migrator:fukulow_migrator@127.0.0.1:15432/fukulow_dev
+      # Test inspection bypasses FORCE; never passed to the server process. gitleaks:allow
+      INSPECTOR_DATABASE_URL: postgres://fukulow:fukulow@127.0.0.1:15432/fukulow_dev
       SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,8 +62,8 @@ jobs:
           cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
           cargo sqlx migrate revert --database-url "$MIGRATOR_DATABASE_URL"
           cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f crates/db/tests/fixtures/populated.sql
-          cargo sqlx migrate revert --database-url "$MIGRATOR_DATABASE_URL"
+          psql "$INSPECTOR_DATABASE_URL" -v ON_ERROR_STOP=1 -f crates/db/tests/fixtures/populated.sql
+          cargo sqlx migrate revert --target-version 0 --database-url "$MIGRATOR_DATABASE_URL"
           cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
       - name: Verify the actual server and nonempty migration history
         run: |

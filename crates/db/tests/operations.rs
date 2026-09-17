@@ -31,7 +31,7 @@ async fn operations_write_exact_typed_audits_and_noop_writes_none() -> Result {
     db::change_member_role(&db.app, owner, org, member, Role::Admin).await?;
     db::suspend_member(&db.app, owner, org, member).await?;
     let row: (String, String, Option<String>) = sqlx::query_as("SELECT role, status, display_name FROM organization_members WHERE organization_id = $1 AND actor_id = $2")
-        .bind(org.0).bind(member.0).fetch_one(&db.app).await?;
+        .bind(org.0).bind(member.0).fetch_one(&db.inspector).await?;
     assert_eq!(
         row,
         (
@@ -71,8 +71,10 @@ async fn failed_audit_insert_rolls_back_the_state_change() -> Result {
     let org = db.organization(owner).await?;
     db.member(org, member, "member").await?;
     let before = db.audit(org).await?;
-    let result =
-        db::change_member_role(&db.app, ActorId(Uuid::now_v7()), org, member, Role::Admin).await;
+    sqlx::query("ALTER TABLE audit_events ADD CONSTRAINT reject_audit CHECK (false) NOT VALID")
+        .execute(&db.owner)
+        .await?;
+    let result = db::change_member_role(&db.app, owner, org, member, Role::Admin).await;
     assert!(matches!(
         result,
         Err(db::ChangeMemberRoleError::Database(_))
@@ -82,7 +84,7 @@ async fn failed_audit_insert_rolls_back_the_state_change() -> Result {
     )
     .bind(org.0)
     .bind(member.0)
-    .fetch_one(&db.app)
+    .fetch_one(&db.inspector)
     .await?;
     assert_eq!(role, "member");
     assert_eq!(db.audit(org).await?, before);
@@ -102,14 +104,14 @@ async fn organization_and_first_owner_are_atomic() -> Result {
     ));
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM organizations WHERE slug = 'fixture')")
-            .fetch_one(&db.app)
+            .fetch_one(&db.inspector)
             .await?;
     assert!(!exists);
     sqlx::query("ALTER TABLE audit_events DROP CONSTRAINT reject_audit")
         .execute(&db.owner)
         .await?;
     let org = db.organization(owner).await?;
-    let membership: (String, String) = sqlx::query_as("SELECT role, status FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(owner.0).fetch_one(&db.app).await?;
+    let membership: (String, String) = sqlx::query_as("SELECT role, status FROM organization_members WHERE organization_id = $1 AND actor_id = $2").bind(org.0).bind(owner.0).fetch_one(&db.inspector).await?;
     assert_eq!(membership, ("owner".into(), "active".into()));
     db.finish().await
 }
@@ -117,7 +119,7 @@ async fn organization_and_first_owner_are_atomic() -> Result {
 #[tokio::test]
 async fn create_person_maps_email_conflicts_and_cleans_up_the_actor() -> Result {
     let db = Database::new().await?;
-    let mut conn = db.app.acquire().await?;
+    let mut conn = db.app.begin().await?;
     let actor = db::create_person(
         &mut conn,
         "fixture@example.invalid",
@@ -136,11 +138,11 @@ async fn create_person_maps_email_conflicts_and_cleans_up_the_actor() -> Result 
         .await,
         Err(db::CreatePersonError::EmailTaken)
     ));
+    conn.commit().await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM actors")
-        .fetch_one(&mut *conn)
+        .fetch_one(&db.inspector)
         .await?;
     assert_eq!(count, 1);
-    drop(conn);
     db.finish().await
 }
 
@@ -200,14 +202,14 @@ async fn create_team_is_scoped_and_missing_organization_is_not_found() -> Result
     )
     .bind(org.0)
     .bind(team.0)
-    .fetch_one(&db.app)
+    .fetch_one(&db.inspector)
     .await?;
     let foreign: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM teams WHERE organization_id = $1 AND id = $2)",
     )
     .bind(other.0)
     .bind(team.0)
-    .fetch_one(&db.app)
+    .fetch_one(&db.inspector)
     .await?;
     assert!(own && !foreign);
     db.finish().await

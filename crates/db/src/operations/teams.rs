@@ -3,6 +3,7 @@ use super::{
     errors::constraint, lock_actor, lock_organization,
 };
 use crate::audit::{Event, RemovalReason};
+use crate::context::{Context, begin};
 use domain::{ActorId, OrganizationId, TeamId, TeamRole};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -21,7 +22,7 @@ pub async fn create_team(
     organization_id: OrganizationId,
     name: &str,
 ) -> Result<TeamId, CreateTeamError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(CreateTeamError::NotFound);
@@ -50,7 +51,7 @@ pub async fn add_team_member(
     actor_id: ActorId,
     role: TeamRole,
 ) -> Result<(), AddTeamMemberError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     let departed = lock_actor(&mut tx, actor_id, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(AddTeamMemberError::NotFound);
@@ -98,7 +99,7 @@ pub async fn change_team_member_role(
     actor_id: ActorId,
     role: TeamRole,
 ) -> Result<(), ChangeTeamMemberRoleError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(ChangeTeamMemberRoleError::NotFound);
@@ -126,7 +127,7 @@ pub async fn remove_team_member(
     team_id: TeamId,
     actor_id: ActorId,
 ) -> Result<(), RemoveTeamMemberError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
     if !lock_organization(&mut tx, organization_id).await? {
         return Err(RemoveTeamMemberError::NotFound);

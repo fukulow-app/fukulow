@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM channel_members m USING channels c WHERE m.channel_id = c.id AND c.organization_id = $1 AND m.actor_id = $2 RETURNING m.channel_id",
+  "query": "DELETE FROM channel_members WHERE organization_id = $1 AND actor_id = $2 RETURNING channel_id",
   "describe": {
     "columns": [
       {
@@ -25,5 +25,5 @@
       false
     ]
   },
-  "hash": "3a3f6fa9ed3187d4235dbbd5e89e8e912c613d1e97e58978a8e4eee57d821731"
+  "hash": "4f7ec6ccb99864dd5306540e5106887d0985de9a67d5c6c37b595578a586a8fd"
 }
