@@ -156,15 +156,15 @@ async fn adding_channel_member_refuses_foreign_and_missing_channels_without_writ
 }
 
 #[tokio::test]
-async fn leaving_removes_channels_and_audits_each_organization() -> Result {
+async fn leaving_removes_internal_and_external_channels_and_audits_each_organization() -> Result {
     let db = Database::new().await?;
     let a = Conversation::new(&db).await?;
     let b = Conversation::new(&db).await?;
     let actor = db.person().await?;
-    for c in [&a, &b] {
-        db.member(c.organization, actor, "member").await?;
-        db::add_channel_member(&db.app, c.owner, c.organization, c.channel, actor).await?;
-    }
+    db.member(a.organization, actor, "member").await?;
+    db::add_channel_member(&db.app, a.owner, a.organization, a.channel, actor).await?;
+    // The application cannot list an outside actor until #43, so the fixture stores it directly.
+    list_outside_actor(&db, &b, actor).await?;
     db::leave_service(&db.app, actor).await?;
     for c in [&a, &b] {
         let records: Vec<_> = db
@@ -187,8 +187,7 @@ async fn leaving_removes_channels_and_audits_each_organization() -> Result {
         assert_eq!(count, 0);
     }
     let outsider = db.person().await?;
-    db.member(b.organization, outsider, "member").await?;
-    db::add_channel_member(&db.app, b.owner, b.organization, b.channel, outsider).await?;
+    list_outside_actor(&db, &b, outsider).await?;
     db::leave_service(&db.app, outsider).await?;
     let records: Vec<_> = db
         .audit(b.organization)
@@ -200,6 +199,97 @@ async fn leaving_removes_channels_and_audits_each_organization() -> Result {
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_members m JOIN channels c ON c.id = m.channel_id WHERE c.organization_id = $1 AND m.actor_id = $2").bind(b.organization.0).bind(outsider.0).fetch_one(&db.inspector).await?;
     assert_eq!(count, 0);
     db.finish().await
+}
+
+#[tokio::test]
+async fn an_outside_departure_audit_is_admitted_only_for_the_actors_own_listing() -> Result {
+    let db = Database::new().await?;
+    let a = Conversation::new(&db).await?;
+    let b = Conversation::new(&db).await?;
+    let outsider = db.person().await?;
+    let stranger = db.person().await?;
+    list_outside_actor(&db, &b, outsider).await?;
+    list_outside_actor(&db, &a, stranger).await?;
+    let valid = (
+        b.organization.0,
+        outsider.0,
+        "channel.member.removed",
+        b.channel.0,
+        "left_service",
+    );
+    for (organization, target, action, channel, reason) in [
+        (
+            a.organization.0,
+            outsider.0,
+            "channel.member.removed",
+            b.channel.0,
+            "left_service",
+        ),
+        (
+            b.organization.0,
+            outsider.0,
+            "channel.member.removed",
+            a.channel.0,
+            "left_service",
+        ),
+        (
+            b.organization.0,
+            outsider.0,
+            "channel.member.removed",
+            b.channel.0,
+            "removed",
+        ),
+        (
+            b.organization.0,
+            outsider.0,
+            "channel.member.added",
+            b.channel.0,
+            "left_service",
+        ),
+        (
+            b.organization.0,
+            stranger.0,
+            "channel.member.removed",
+            b.channel.0,
+            "left_service",
+        ),
+        valid,
+    ] {
+        let mut tx = db.actor(outsider).await?;
+        let result = sqlx::query("INSERT INTO audit_events (id, organization_id, actor_id, action, target_type, target_id, metadata) VALUES ($1, $2, $3, $4, 'actor', $5, jsonb_build_object('channel_id', $6::uuid, 'reason', $7::text))")
+            .bind(Uuid::now_v7()).bind(organization).bind(outsider.0).bind(action).bind(target).bind(channel).bind(reason)
+            .execute(&mut *tx).await;
+        if (organization, target, action, channel, reason) == valid {
+            result?;
+        } else {
+            support::rejected(result, "42501");
+        }
+        tx.rollback().await?;
+    }
+    // Once the listing is gone, the same record is refused.
+    let mut tx = db.actor(outsider).await?;
+    sqlx::query("DELETE FROM channel_members WHERE actor_id = $1")
+        .bind(outsider.0)
+        .execute(&mut *tx)
+        .await?;
+    support::rejected(
+        sqlx::query("INSERT INTO audit_events (id, organization_id, actor_id, action, target_type, target_id, metadata) VALUES ($1, $2, $3, 'channel.member.removed', 'actor', $3, jsonb_build_object('channel_id', $4::uuid, 'reason', 'left_service'))")
+            .bind(Uuid::now_v7()).bind(b.organization.0).bind(outsider.0).bind(b.channel.0)
+            .execute(&mut *tx).await,
+        "42501",
+    );
+    tx.rollback().await?;
+    db.finish().await
+}
+
+async fn list_outside_actor(db: &Database, c: &Conversation, actor: ActorId) -> Result {
+    sqlx::query("INSERT INTO channel_members (channel_id, channel_scope, organization_id, actor_id) VALUES ($1, 'team', $2, $3)")
+        .bind(c.channel.0)
+        .bind(c.organization.0)
+        .bind(actor.0)
+        .execute(&db.inspector)
+        .await?;
+    Ok(())
 }
 
 #[tokio::test]

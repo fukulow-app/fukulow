@@ -88,11 +88,20 @@ async fn leave_channels(
     organization: OrganizationId,
     actor: ActorId,
 ) -> Result<(), sqlx::Error> {
-    let removed = sqlx::query!("DELETE FROM channel_members WHERE organization_id = $1 AND actor_id = $2 RETURNING channel_id", organization.0, actor.0).fetch_all(&mut *conn).await?;
-    for row in removed {
+    // Audit before deleting: an outside actor's departure audit is admitted only while its
+    // own listing still names the channel and organization.
+    let listings = sqlx::query!("SELECT channel_id FROM channel_members WHERE organization_id = $1 AND actor_id = $2 ORDER BY channel_id", organization.0, actor.0).fetch_all(&mut *conn).await?;
+    for row in &listings {
         Event::channel_member_left(actor, ChannelId(row.channel_id))
             .write(conn, organization, actor)
             .await?;
     }
+    sqlx::query!(
+        "DELETE FROM channel_members WHERE organization_id = $1 AND actor_id = $2",
+        organization.0,
+        actor.0
+    )
+    .execute(conn)
+    .await?;
     Ok(())
 }

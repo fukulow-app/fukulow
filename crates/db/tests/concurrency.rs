@@ -223,3 +223,51 @@ async fn audit_performer_is_locked_before_the_organization() -> Result {
     mutation.await??;
     db.finish().await
 }
+
+#[tokio::test]
+async fn a_role_change_waiting_on_a_departure_sees_the_membership_as_left() -> Result {
+    let db = Database::new().await?;
+    let owner = db.person().await?;
+    let actor = db.person().await?;
+    let org = db.organization(owner).await?;
+    db.member(org, actor, "member").await?;
+    db::suspend_member(&db.app, owner, org, actor).await?;
+    // Leaving does not lock an organization where the membership is inactive. What orders the
+    // two is that the departure audit's foreign key takes KEY SHARE on the organization, which
+    // conflicts with change_member_role's FOR UPDATE, so the role change reads only after the
+    // departure commits. Holding the membership row lines both up, the departure first.
+    let mut blocker = db.inspector.begin().await?;
+    sqlx::query("SELECT 1 FROM organization_members WHERE organization_id = $1 AND actor_id = $2 FOR UPDATE")
+        .bind(org.0)
+        .bind(actor.0)
+        .fetch_one(&mut *blocker)
+        .await?;
+    let pool = db.app.clone();
+    let leave = tokio::spawn(async move { db::leave_service(&pool, actor).await });
+    wait_for_blocked_operations(&db.owner, 1).await?;
+    let pool = db.app.clone();
+    let change = tokio::spawn(async move {
+        db::change_member_role(&pool, owner, org, actor, OrganizationRole::Admin).await
+    });
+    wait_for_blocked_operations(&db.owner, 2).await?;
+    blocker.commit().await?;
+    leave.await??;
+    assert!(matches!(
+        change.await?,
+        Err(db::ChangeMemberRoleError::NotFound)
+    ));
+    let row: (String, String) = sqlx::query_as(
+        "SELECT role, status FROM organization_members WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(org.0)
+    .bind(actor.0)
+    .fetch_one(&db.inspector)
+    .await?;
+    assert_eq!(row, ("member".into(), "left".into()));
+    let changes: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE organization_id = $1 AND action = 'organization.member.role_changed'")
+        .bind(org.0)
+        .fetch_one(&db.inspector)
+        .await?;
+    assert_eq!(changes, 0);
+    db.finish().await
+}
