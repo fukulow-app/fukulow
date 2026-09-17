@@ -43,8 +43,9 @@ pub async fn change_member_role(
     let (from, status) = member(&mut tx, organization_id, actor_id)
         .await?
         .ok_or(ChangeMemberRoleError::NotFound)?;
-    // Someone who has left is no longer a member. Changing their role would only write an
-    // audit record, which cannot be removed, about a membership that no longer exists.
+    // Someone who has left is no longer a member; the row stays only as history. Changing
+    // their role would write an audit record, which cannot be removed, about a membership
+    // that grants nothing.
     if status == "left" {
         return Err(ChangeMemberRoleError::NotFound);
     }
