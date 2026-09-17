@@ -56,6 +56,17 @@ once. A test that passes either way is not evidence.
 **A concurrency test must run genuinely concurrently.** Sequential execution
 cannot exercise the interleaving it exists to catch.
 
+## Scope of a change
+
+- **Do what the issue asks, and no more.** Code outside it is not reformatted,
+  renamed or restructured in the same pull request. Something worth fixing becomes
+  its own issue
+- **A behaviour change and a refactoring are separate pull requests.** Mixed, a
+  reviewer cannot tell which lines change what the code does
+- **No trait, generic parameter or layer with a single implementation** for a need
+  no issue has. A test double counts as an implementation. Share code when two
+  places change for the same reason, not because they look alike
+
 ## Writing
 
 - Code, comments, documentation, commits, issues and pull requests are **English**

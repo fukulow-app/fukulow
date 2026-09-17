@@ -79,6 +79,14 @@ say which item. Do not comment when it does not.
 - **Flag** a test that claims to cover concurrency but runs its operations one
   after another.
 
+## Scope of a change
+
+- **Flag** reformatting, renaming or restructuring of code the linked issue does not
+  ask for, and a pull request that both changes behaviour and refactors. Name the
+  files or hunks that fall outside the issue.
+- **Flag** a new trait, generic parameter or layer that has a single implementation
+  — a test double counts as one — when no issue calls for another.
+
 ## Changes to how the project is reviewed or built
 
 - **Flag, at the top of the review,** any change to
