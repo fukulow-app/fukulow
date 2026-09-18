@@ -9,15 +9,18 @@ AS $$ BEGIN
             RAISE EXCEPTION 'invalid initial invite use' USING ERRCODE = '23514';
         END IF;
     ELSIF NEW.used_count IS DISTINCT FROM OLD.used_count THEN
+        -- A use changes the count and nothing else: revoking in the same statement would
+        -- make one row version both the proof of a use and a revocation.
         IF NEW.used_count <> OLD.used_count + 1 OR OLD.used_count >= OLD.max_uses
-           OR OLD.revoked_at IS NOT NULL OR OLD.expires_at <= now() THEN
+           OR OLD.revoked_at IS NOT NULL OR OLD.expires_at <= now()
+           OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
             RAISE EXCEPTION 'invalid invite use' USING ERRCODE = '42501';
         END IF;
-    ELSIF NEW.revoked_at IS NOT DISTINCT FROM OLD.revoked_at THEN
-        RAISE EXCEPTION 'invite update requires use or revocation' USING ERRCODE = '42501';
-    END IF;
-    IF TG_OP = 'UPDATE' AND OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NULL THEN
-        RAISE EXCEPTION 'invite revocation is permanent' USING ERRCODE = '42501';
+    ELSIF OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL THEN
+        -- The only other change is the first revocation of an unrevoked invite. A no-op,
+        -- an un-revocation and a rewritten revocation time are all refused: the time is
+        -- when the invite stopped admitting anyone, and the audit record names it.
+        RAISE EXCEPTION 'invite update requires a use or a first revocation' USING ERRCODE = '42501';
     END IF;
     RETURN NEW;
 END $$;

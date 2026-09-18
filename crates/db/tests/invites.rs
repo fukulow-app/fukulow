@@ -162,10 +162,10 @@ async fn invite_trigger_refuses_fabricated_initial_counts_unbounded_changes_and_
         );
         tx.rollback().await?;
     }
-    db::revoke_invite(&db.app, owner, org, Some(id)).await?;
+    // A use that also revokes is refused: a use changes the count and nothing else.
     let mut tx = presented(&db.app, &hash).await?;
     rejected(
-        sqlx::query("UPDATE invites SET revoked_at = NULL WHERE organization_id = $1 AND id = $2")
+        sqlx::query("UPDATE invites SET used_count = used_count + 1, revoked_at = now() WHERE organization_id = $1 AND id = $2")
             .bind(org.0)
             .bind(id.0)
             .execute(&mut *tx)
@@ -173,6 +173,23 @@ async fn invite_trigger_refuses_fabricated_initial_counts_unbounded_changes_and_
         "42501",
     );
     tx.rollback().await?;
+    db::revoke_invite(&db.app, owner, org, Some(id)).await?;
+    // After the first revocation, neither un-revoking nor rewriting its time is allowed.
+    for statement in [
+        "UPDATE invites SET revoked_at = NULL WHERE organization_id = $1 AND id = $2",
+        "UPDATE invites SET revoked_at = now() + interval '1 day' WHERE organization_id = $1 AND id = $2",
+    ] {
+        let mut tx = presented(&db.app, &hash).await?;
+        rejected(
+            sqlx::query(statement)
+                .bind(org.0)
+                .bind(id.0)
+                .execute(&mut *tx)
+                .await,
+            "42501",
+        );
+        tx.rollback().await?;
+    }
     db.finish().await
 }
 
