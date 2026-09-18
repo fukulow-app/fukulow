@@ -405,3 +405,113 @@ fn lint_attributes_are_read_as_syntax() -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
+
+/// Router-building calls that register a route. Found as method calls
+/// (`router.route(..)`) and as path calls (`Router::route(router, ..)`), since either
+/// registers a route the sweep would never see.
+const ROUTE_REGISTRATIONS: &[&str] = &[
+    "route",
+    "route_service",
+    "nest",
+    "nest_service",
+    "merge",
+    "fallback",
+    "fallback_service",
+];
+
+#[derive(Default)]
+struct RouteRegistrations(Vec<String>);
+
+impl<'ast> Visit<'ast> for RouteRegistrations {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let name = call.method.to_string();
+        if ROUTE_REGISTRATIONS.contains(&name.as_str()) {
+            self.0.push(format!(".{name}(…)"));
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(function) = &*call.func {
+            let segments = &function.path.segments;
+            if let Some(last) = segments.last().filter(|_| segments.len() > 1) {
+                let name = last.ident.to_string();
+                if ROUTE_REGISTRATIONS.contains(&name.as_str()) {
+                    self.0.push(format!("…::{name}(…)"));
+                }
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_item_mod(&mut self, module: &'ast ItemMod) {
+        if !is_test_only(&module.attrs) {
+            visit::visit_item_mod(self, module);
+        }
+    }
+}
+
+#[test]
+fn routes_are_registered_only_in_the_registry() -> Result<(), Box<dyn Error>> {
+    let mut offenders = Vec::new();
+    let mut registry = None;
+    for (path, text) in production_files()? {
+        if !path.starts_with("crates/app/src/") {
+            continue;
+        }
+        let mut calls = RouteRegistrations::default();
+        calls.visit_file(&syn::parse_file(&text)?);
+        if path == "crates/app/src/route_registry.rs" {
+            registry = Some(calls.0);
+        } else {
+            offenders.extend(calls.0.into_iter().map(|call| format!("{path}: {call}")));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "route registration outside route_registry.rs: {offenders:?}"
+    );
+    // The registry itself registers exactly once: the fold over ROUTES. A second call
+    // there would add a route the table does not list.
+    assert_eq!(
+        registry,
+        Some(vec![".route(…)".to_owned()]),
+        "route_registry.rs must register routes only by folding ROUTES"
+    );
+    Ok(())
+}
+
+#[test]
+fn route_registrations_are_found_in_every_calling_form() -> Result<(), Box<dyn Error>> {
+    // Written out here rather than read from ROUTE_REGISTRATIONS, so dropping a name from
+    // that list fails this test instead of silently shrinking what it checks.
+    for name in [
+        "route",
+        "route_service",
+        "nest",
+        "nest_service",
+        "merge",
+        "fallback",
+        "fallback_service",
+    ] {
+        for source in [
+            format!("fn f(r: Router) -> Router {{ r.{name}(x) }}"),
+            format!("fn f(r: Router) -> Router {{ r\n    .{name}(x) }}"),
+            format!("fn f(r: Router) -> Router {{ Router::{name}(r, x) }}"),
+            format!("fn f(r: Router) -> Router {{ axum::Router::{name}(r, x) }}"),
+        ] {
+            let mut calls = RouteRegistrations::default();
+            calls.visit_file(&syn::parse_file(&source)?);
+            assert_eq!(calls.0.len(), 1, "{source:?}");
+        }
+    }
+    let mut calls = RouteRegistrations::default();
+    calls.visit_file(&syn::parse_file(
+        "#[cfg(test)] mod tests { fn f(r: Router) -> Router { r.route(\"/x\", get(h)) } }",
+    )?);
+    assert!(
+        calls.0.is_empty(),
+        "a test module's router is not production"
+    );
+    Ok(())
+}

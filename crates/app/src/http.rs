@@ -1,14 +1,11 @@
 use std::{io::ErrorKind, net::SocketAddr};
 
 use anyhow::{Context, Result, anyhow};
-use axum::{Router, http::header, response::IntoResponse, routing::get};
+use axum::{Router, http::header, response::IntoResponse};
 use tokio::net::TcpListener;
 
 pub(crate) fn routes(state: crate::sessions::StateData) -> Router {
-    Router::new()
-        .route("/health", get(health))
-        .merge(crate::sessions::routes())
-        .merge(crate::invites::routes())
+    crate::route_registry::router()
         // `layer`, not `route_layer`: only `layer` also wraps the fallback, so a request to a
         // path that does not exist is still refused on its Origin before it is a 404.
         .layer(axum::middleware::from_fn_with_state(state.clone(), protect))
@@ -48,7 +45,7 @@ async fn protect(
     }
 }
 
-async fn health() -> impl IntoResponse {
+pub(crate) async fn health() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"status":"ok"}"#,
@@ -75,7 +72,7 @@ pub(crate) async fn run(address: SocketAddr, routes: Router) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{extract::Path, http::StatusCode};
+    use axum::{extract::Path, http::StatusCode, routing::get};
     use std::io::{Read, Write};
 
     #[tokio::test]

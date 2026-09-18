@@ -1,10 +1,9 @@
 use crate::sessions::{Authenticated, StateData};
 use axum::{
-    Json, Router,
+    Json,
     body::Bytes,
     extract::{State, rejection::BytesRejection},
     http::{StatusCode, Uri},
-    routing::{delete, post},
 };
 use domain::{InviteId, OrganizationId};
 use serde_json::{Map, Value, json};
@@ -16,18 +15,7 @@ pub(crate) type TokenGenerator =
 pub(crate) type PasswordHasher =
     dyn Fn(&str) -> Result<String, auth::PasswordHashError> + Send + Sync;
 
-pub(crate) const CREATE_PATH: &str = "/api/v1/organizations/{organization_id}/invites";
-pub(crate) const REVOKE_PATH: &str = "/api/v1/organizations/{organization_id}/invites/{id}";
-pub(crate) const ACCEPT_PATH: &str = "/api/v1/invite-acceptances";
-
-pub(crate) fn routes() -> Router<StateData> {
-    Router::new()
-        .route(CREATE_PATH, post(create))
-        .route(REVOKE_PATH, delete(revoke))
-        .route(ACCEPT_PATH, post(accept))
-}
-
-async fn create(
+pub(crate) async fn create(
     State(state): State<StateData>,
     authenticated: Authenticated,
     uri: Uri,
@@ -72,7 +60,7 @@ async fn create(
     ))
 }
 
-async fn revoke(
+pub(crate) async fn revoke(
     State(state): State<StateData>,
     authenticated: Authenticated,
     uri: Uri,
@@ -91,7 +79,7 @@ async fn revoke(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn accept(
+pub(crate) async fn accept(
     State(state): State<StateData>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<StatusCode, StatusCode> {

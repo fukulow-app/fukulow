@@ -1,6 +1,11 @@
 mod config;
 mod http;
 mod invites;
+#[expect(
+    dead_code,
+    reason = "Route metadata is also read by the HTTP contract sweep"
+)]
+mod route_registry;
 mod sessions;
 mod shutdown;
 mod telemetry;

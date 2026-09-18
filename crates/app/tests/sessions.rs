@@ -15,6 +15,8 @@ mod database;
 mod http;
 #[path = "../src/invites.rs"]
 mod invites;
+#[path = "../src/route_registry.rs"]
+mod route_registry;
 mod session_support;
 #[path = "../src/sessions.rs"]
 mod sessions;
@@ -389,4 +391,114 @@ fn record_token() -> std::result::Result<(auth::SessionToken, db::TokenHash), au
     let (token, hash) = auth::new_session_token()?;
     *GENERATED_TOKEN.lock().unwrap() = Some(token.as_str().to_owned());
     Ok((token, hash))
+}
+
+#[tokio::test]
+async fn every_registered_route_obeys_the_http_contract() -> Result {
+    let db = Database::new().await?;
+    person(&db).await?;
+    let server = Server::new(sessions::StateData::new(db.app.clone(), ORIGIN.into())).await?;
+    let unknown = auth::new_session_token()?.0;
+    let mut failures = Vec::new();
+    for route in route_registry::ROUTES {
+        let path = route
+            .path
+            .split('/')
+            .map(|part| {
+                if part.starts_with('{') && part.ends_with('}') {
+                    uuid::Uuid::now_v7().to_string()
+                } else {
+                    part.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        let mut rows = Vec::new();
+        if route.changes_state() {
+            for origin in [None, Some("https://foreign.example.invalid")] {
+                rows.push((origin, "missing", path.as_str(), Some(403)));
+                if route.needs_session {
+                    rows.push((origin, "unknown", path.as_str(), Some(403)));
+                    rows.push((origin, "valid", path.as_str(), Some(403)));
+                }
+            }
+        }
+        rows.push((
+            Some(ORIGIN),
+            "missing",
+            &path,
+            route.needs_session.then_some(401),
+        ));
+        if route.needs_session {
+            rows.push((Some(ORIGIN), "unknown", &path, Some(401)));
+        }
+        if route.path != "/health" {
+            rows.push((
+                Some(ORIGIN),
+                "missing",
+                path.strip_prefix("/api/v1")
+                    .expect("API route must be versioned"),
+                Some(404),
+            ));
+        }
+        for (origin, credential, path, expected) in rows {
+            // A broken Origin guard can revoke a session; each valid row gets a fresh
+            // one so later rows still prove the order against a credential that works.
+            let valid = if credential == "valid" {
+                Some(server.sign_in().await?.cookie()?)
+            } else {
+                None
+            };
+            let token = match credential {
+                "valid" => valid.as_deref(),
+                "unknown" => Some(unknown.as_str()),
+                _ => None,
+            };
+            let response = contract_request(&server, route, path, origin, token).await?;
+            let status_matches =
+                expected.map_or(response.status != 401, |status| response.status == status);
+            let empty_error = response.status < 400
+                || (response.body.is_empty()
+                    && !response
+                        .headers
+                        .iter()
+                        .any(|(name, _)| name == "set-cookie"));
+            if !status_matches || !empty_error {
+                failures.push(format!("{} {}: origin={origin:?}, credential={credential}, path={path}, expected={expected:?} (None means not 401), status={}, empty_body={}, no_set_cookie={}", route.method, route.path, response.status, response.body.is_empty(), !response.headers.iter().any(|(name, _)| name == "set-cookie")));
+            }
+        }
+    }
+    drop(server);
+    db.finish().await?;
+    assert!(
+        failures.is_empty(),
+        "HTTP contract violations:\n{}",
+        failures.join("\n")
+    );
+    Ok(())
+}
+
+async fn contract_request(
+    server: &Server,
+    route: &route_registry::Route,
+    path: &str,
+    origin: Option<&str>,
+    token: Option<&str>,
+) -> Result<session_support::Response> {
+    let origin_header = origin
+        .map(|value| format!("Origin: {value}\r\n"))
+        .unwrap_or_default();
+    let cookie = token
+        .map(|value| format!("Cookie: {}={value}\r\n", sessions::COOKIE_NAME))
+        .unwrap_or_default();
+    // RFC 6455 example nonce, never an authentication credential.
+    const UPGRADE_HEADERS: &str = "Connection: close, Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"; // gitleaks:allow
+    let upgrade = if route.websocket {
+        UPGRADE_HEADERS
+    } else {
+        "Connection: close\r\n"
+    };
+    // Malformed JSON prevents a public route from creating anything. Protected
+    // routes must reject the credential before they attempt to read this body.
+    server.raw(format!("{} {path} HTTP/1.1\r\nHost: localhost\r\n{origin_header}{cookie}{upgrade}Content-Length: 1\r\n\r\n{{", route.method)).await
 }

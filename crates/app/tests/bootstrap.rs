@@ -10,6 +10,12 @@
 
 #[path = "../src/invites.rs"]
 mod invites;
+#[expect(
+    dead_code,
+    reason = "The session test binary runs the route contract sweep"
+)]
+#[path = "../src/route_registry.rs"]
+mod route_registry;
 mod support;
 
 // Reuse the production lifecycle without exposing test routes in the application.
