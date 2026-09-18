@@ -68,6 +68,13 @@ existing order and error tests that exercise those details.
 
 ## What a pull request needs
 
+A new invariant in [`docs/architecture/invariants.md`](docs/architecture/invariants.md)
+comes with its enforcement mechanism and a test shown failing when that mechanism
+is removed. If enforcement still depends on people, use **Review** in its
+*Enforced by* cell and cite the issue that will replace it with a mechanism.
+`crates/app/tests/invariants_document.rs` requires that citation whenever the cell
+contains the word "review", in any case.
+
 - A linked issue
 - A description of what changes and why
 - Tests that fail without the change — **check that they fail**, a test that
