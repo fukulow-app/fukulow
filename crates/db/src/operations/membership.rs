@@ -35,7 +35,7 @@ pub async fn change_member_role(
 ) -> Result<(), ChangeMemberRoleError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(ChangeMemberRoleError::NotFound);
     }
     let (from, status) = member(&mut tx, organization_id, actor_id)
@@ -83,7 +83,7 @@ pub async fn suspend_member(
 ) -> Result<(), SuspendMemberError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(SuspendMemberError::NotFound);
     }
     let (role, status) = member(&mut tx, organization_id, actor_id)
@@ -115,7 +115,7 @@ pub async fn reactivate_member(
 ) -> Result<(), ReactivateMemberError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     let departed = lock_actor(&mut tx, actor_id, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(ReactivateMemberError::NotFound);
     }
     let (_, status) = member(&mut tx, organization_id, actor_id)

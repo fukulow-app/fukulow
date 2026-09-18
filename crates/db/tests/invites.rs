@@ -1,5 +1,5 @@
 mod support;
-use domain::{ActorId, Capability, InviteId, OrganizationId};
+use domain::{ActorId, InviteId, OrganizationId};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use support::{Database, Result, invites as fixtures, rejected};
 use time::{Duration, OffsetDateTime};
@@ -32,41 +32,6 @@ async fn presented<'a>(
         .execute(&mut *tx)
         .await?;
     Ok(tx)
-}
-
-#[tokio::test]
-async fn capability_reads_only_active_membership_and_scopes_the_organization() -> Result {
-    let db = Database::new().await?;
-    let (actor, org, _, _) = fixture(&db, 1).await?;
-    for (role, status, expected) in [
-        ("owner", "active", db::Access::Allowed),
-        ("admin", "active", db::Access::Allowed),
-        ("member", "active", db::Access::Forbidden),
-        ("owner", "suspended", db::Access::NotAMember),
-        ("admin", "left", db::Access::NotAMember),
-    ] {
-        fixtures::set_role(&db, org, actor, role, status).await?;
-        assert_eq!(
-            db::can(&db.app, actor, org, Capability::InviteMember).await?,
-            expected
-        );
-    }
-    let outsider = db.person().await?;
-    assert_eq!(
-        db::can(&db.app, outsider, org, Capability::InviteMember).await?,
-        db::Access::NotAMember
-    );
-    assert_eq!(
-        db::can(
-            &db.app,
-            actor,
-            OrganizationId(Uuid::now_v7()),
-            Capability::InviteMember
-        )
-        .await?,
-        db::Access::NotAMember
-    );
-    db.finish().await
 }
 
 #[tokio::test]
@@ -197,7 +162,7 @@ async fn invite_trigger_refuses_fabricated_initial_counts_unbounded_changes_and_
         );
         tx.rollback().await?;
     }
-    db::revoke_invite(&db.app, owner, org, id).await?;
+    db::revoke_invite(&db.app, owner, org, Some(id)).await?;
     let mut tx = presented(&db.app, &hash).await?;
     rejected(
         sqlx::query("UPDATE invites SET revoked_at = NULL WHERE organization_id = $1 AND id = $2")
@@ -284,16 +249,16 @@ async fn trusted_operations_still_refuse_missing_and_foreign_organizations() -> 
                 &db.app,
                 actor,
                 target,
-                &hash,
+                fixtures::token(&hash),
                 OffsetDateTime::now_utc() + Duration::hours(1),
                 1
             )
             .await,
-            Err(db::CreateInviteError::NotFound)
+            Err(db::CreateInviteError::NotAMember)
         ));
         assert!(matches!(
-            db::revoke_invite(&db.app, actor, target, id).await,
-            Err(db::RevokeInviteError::NotFound)
+            db::revoke_invite(&db.app, actor, target, Some(id)).await,
+            Err(db::RevokeInviteError::NotAMember)
         ));
     }
     assert_eq!(fixtures::counts(&db).await?, before);

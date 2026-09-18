@@ -609,7 +609,7 @@ async fn precheck_is_only_a_filter_and_hashing_holds_no_transaction_or_invite_lo
         tokio::time::timeout(std::time::Duration::from_secs(5), reached.notified()).await?;
         fixtures::assert_no_app_transaction(&f.db).await?;
         if revoke {
-            db::revoke_invite(&f.db.app, f.actor, f.org, id).await?;
+            db::revoke_invite(&f.db.app, f.actor, f.org, Some(id)).await?;
         } else {
             fixtures::consume(&f.db.inspector, f.org, id).await?;
         }

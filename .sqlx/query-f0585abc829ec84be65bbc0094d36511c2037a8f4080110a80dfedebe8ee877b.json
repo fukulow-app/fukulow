@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT role FROM organization_members WHERE organization_id = $1 AND actor_id = $2 AND status = 'active'",
+  "query": "SELECT role FROM organization_members WHERE organization_id = $1 AND actor_id = $2 AND status = 'active' FOR SHARE",
   "describe": {
     "columns": [
       {
@@ -25,5 +25,5 @@
       false
     ]
   },
-  "hash": "a2b5177ec5936688ffa335ce22ed3b3f1f6e321330f7e759655331c14194bae3"
+  "hash": "f0585abc829ec84be65bbc0094d36511c2037a8f4080110a80dfedebe8ee877b"
 }

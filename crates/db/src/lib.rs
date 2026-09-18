@@ -1,5 +1,5 @@
 //! The persistence boundary. Tenant operations scope every query to the named
-//! organization; callers supply authorization before entering this crate.
+//! organization. Invite mutations authorize from locked membership in their writing transaction.
 
 mod audit;
 mod connection;

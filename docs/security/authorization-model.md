@@ -69,14 +69,30 @@ a notice does not decide who receives it.
 if member.role == Role::Admin { ... }
 
 // Yes
-if can(&actor, Capability::InviteMember) { ... }
+match authorize(conn, actor, organization, Capability::InviteMember).await? { ... }
 ```
 
 `Capability::InviteMember` is held by owners and admins. It authorizes both creating
-and revoking organization invites; members do not hold it. `db::can(pool, actor,
-organization, capability)` reads only an active membership and asks
-`OrganizationRole::holds` in `domain`. A suspended owner is not an active member
-and receives 404. An active member without the capability receives 403.
+and revoking organization invites; members do not hold it. State-changing operations
+must decide their capability inside the transaction that writes, from an active
+membership row locked `FOR SHARE`. The crate-private `db` helper
+`authorize(conn, actor, organization, capability)` asks `OrganizationRole::holds`
+in `domain` and returns `Allowed`, `Forbidden`, or `NotAMember`. Invite creation
+and revocation use it; routes map the operation's refusal to 403 or 404 and do
+not run a separate authorization transaction. A suspended owner is not an active
+member and receives 404. An active member without the capability receives 403.
+
+The lock order is **actor → organization → membership**: call `lock_actor` and
+`lock_organization` before `authorize`. A missing or invisible organization also
+returns `NotAMember`. Taking the membership first can deadlock with a demotion:
+the demotion holds the organization `FOR UPDATE` while waiting for membership,
+and an invite INSERT needs `KEY SHARE` on that organization for its foreign key.
+Invite operations take the organization `FOR SHARE`: this conflicts with role
+changes' `FOR UPDATE`, but allows invite acceptance's membership foreign key to
+take `KEY SHARE`. Otherwise acceptance holding the invite and revocation holding
+the organization can deadlock. Other operations keep their organization
+`FOR UPDATE` locks. Revocation authorizes before looking up the invite, including
+before reporting an invalid invite identifier.
 
 The mapping from role to capability lives in one place in `domain`, in code, not
 in the database. **When roles change shape — several per person, new ones per
@@ -173,7 +189,8 @@ that holds when something reaches the tables another way.
   An inactive actor's own organization membership can only become `left`, with its
   display name cleared and its role unchanged
 - **Passing row security is not permission.** Policies decide visibility;
-  `can(actor, Capability)` decides what may be done before an operation runs
+  `authorize(conn, actor, organization, Capability)` decides what may be done
+  inside the writing transaction
 - The application role cannot bypass row security: it does not own the tables,
   is not a superuser, and has no `BYPASSRLS`. Every application table, including
   globals, has ENABLE and FORCE. Exactly two hardened definer functions read

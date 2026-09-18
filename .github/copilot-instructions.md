@@ -53,9 +53,14 @@ say which item. Do not comment when it does not.
 ## Authorization
 
 - **Flag** a route that reads or changes a protected resource without using
-  `is_organization_member`, `can_access_channel`, or `can` (which checks active
-  organization membership before its capability table). Combining them is allowed.
+  `is_organization_member`, `can_access_channel`, or an operation using `authorize`
+  (which checks active organization membership before its capability table).
+  Combining them is allowed.
   Operational routes such as `/health` are not flagged.
+- **Flag** a route that checks authorization in its own transaction before calling
+  a state-changing operation. The operation must decide its capability in the
+  writing transaction from membership locked `FOR SHARE`, after actor and
+  organization locks, in that order.
 - **Flag** the contents of a **team-scoped** channel guarded by organization
   membership. That locks out members from outside the organization, whom the model
   allows. (An organization-scoped channel *is* guarded by organization membership;

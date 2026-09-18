@@ -6,7 +6,7 @@ use axum::{
     http::{StatusCode, Uri},
     routing::{delete, post},
 };
-use domain::{Capability, InviteId, OrganizationId};
+use domain::{InviteId, OrganizationId};
 use serde_json::{Map, Value, json};
 use sqlx::types::Uuid;
 use time::{Duration, UtcOffset, format_description::well_known::Rfc3339};
@@ -41,25 +41,28 @@ async fn create(
         1
     };
     let organization = OrganizationId(path_identifier(&uri, 4)?);
-    authorize(&state, authenticated.actor, organization).await?;
-    let (token, hash) =
-        (state.new_invite_token)().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let expires_at = ((state.now)() + Duration::seconds(expires_in)).to_offset(UtcOffset::UTC);
+    // Formatted before the operation, not after: a failure after the commit would leave
+    // an invite nobody received. RFC 3339 cannot fail for a year within 0..=9999.
     let formatted = expires_at
         .format(&Rfc3339)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let id = db::create_invite(
+    let new_invite_token = state.new_invite_token;
+    let (id, token) = db::create_invite(
         &state.pool,
         authenticated.actor,
         organization,
-        &hash,
+        move || new_invite_token().ok(),
         expires_at,
         max_uses,
     )
     .await
     .map_err(|error| match error {
-        db::CreateInviteError::NotFound => StatusCode::NOT_FOUND,
-        db::CreateInviteError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        db::CreateInviteError::NotAMember => StatusCode::NOT_FOUND,
+        db::CreateInviteError::Forbidden => StatusCode::FORBIDDEN,
+        db::CreateInviteError::TokenUnavailable | db::CreateInviteError::Database(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     })?;
     Ok((
         StatusCode::CREATED,
@@ -75,12 +78,14 @@ async fn revoke(
     uri: Uri,
 ) -> Result<StatusCode, StatusCode> {
     let organization = OrganizationId(path_identifier(&uri, 4)?);
-    authorize(&state, authenticated.actor, organization).await?;
-    let invite = InviteId(path_identifier(&uri, 6)?);
+    let invite = path_identifier(&uri, 6).ok().map(InviteId);
     db::revoke_invite(&state.pool, authenticated.actor, organization, invite)
         .await
         .map_err(|error| match error {
-            db::RevokeInviteError::NotFound => StatusCode::NOT_FOUND,
+            db::RevokeInviteError::Forbidden => StatusCode::FORBIDDEN,
+            db::RevokeInviteError::NotAMember | db::RevokeInviteError::NotFound => {
+                StatusCode::NOT_FOUND
+            }
             db::RevokeInviteError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
     Ok(StatusCode::NO_CONTENT)
@@ -198,19 +203,4 @@ fn identifier(value: &str) -> Result<Uuid, StatusCode> {
         return Err(StatusCode::NOT_FOUND);
     }
     Uuid::parse_str(value).map_err(|_| StatusCode::NOT_FOUND)
-}
-
-async fn authorize(
-    state: &StateData,
-    actor: domain::ActorId,
-    organization: OrganizationId,
-) -> Result<(), StatusCode> {
-    match db::can(&state.pool, actor, organization, Capability::InviteMember)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        db::Access::Allowed => Ok(()),
-        db::Access::Forbidden => Err(StatusCode::FORBIDDEN),
-        db::Access::NotAMember => Err(StatusCode::NOT_FOUND),
-    }
 }

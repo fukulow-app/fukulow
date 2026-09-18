@@ -92,6 +92,12 @@ operation_error!(SignInError {
 operation_error!(SessionError { NoSession => "no session" });
 
 operation_error!(AccessError {});
-operation_error!(CreateInviteError { NotFound => "organization not found" });
-operation_error!(RevokeInviteError { NotFound => "invite not found" });
+operation_error!(CreateInviteError {
+    NotAMember => "organization member not found", Forbidden => "capability required",
+    TokenUnavailable => "invite token could not be generated"
+});
+operation_error!(RevokeInviteError {
+    NotAMember => "organization member not found", Forbidden => "capability required",
+    NotFound => "invite not found"
+});
 operation_error!(AcceptInviteError { InviteUnusable => "invite unusable", EmailTaken => "email is already registered" });

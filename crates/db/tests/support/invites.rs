@@ -5,6 +5,12 @@ use sqlx::PgPool;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
+/// Hands an operation a fixed hash where the application's RNG would make a token.
+pub(crate) fn token(hash: &db::TokenHash) -> impl FnOnce() -> Option<((), db::TokenHash)> + Send {
+    let hash = hash.clone();
+    move || Some(((), hash))
+}
+
 pub(crate) async fn invite(
     db: &Database,
     actor: ActorId,
@@ -16,11 +22,12 @@ pub(crate) async fn invite(
         &db.app,
         actor,
         org,
-        hash,
+        token(hash),
         OffsetDateTime::now_utc() + Duration::hours(1),
         max_uses,
     )
-    .await?)
+    .await?
+    .0)
 }
 
 pub(crate) async fn stored(db: &Database, org: OrganizationId, id: InviteId) -> Result<Value> {
@@ -73,16 +80,17 @@ pub(crate) async fn unusable(
                 &db.app,
                 actor,
                 org,
-                hash,
+                token(hash),
                 OffsetDateTime::now_utc() - Duration::hours(1),
                 1,
             )
-            .await?,
+            .await?
+            .0,
         )),
         "revoked" | "exhausted" => {
             let id = invite(db, actor, org, hash, 1).await?;
             if kind == "revoked" {
-                db::revoke_invite(&db.app, actor, org, id).await?;
+                db::revoke_invite(&db.app, actor, org, Some(id)).await?;
             } else {
                 consume(&db.inspector, org, id).await?;
             }

@@ -1,3 +1,4 @@
+use super::authorization::{Access, authorize};
 use super::{
     AcceptInviteError, AccessError, CreateInviteError, CreatePersonError, RevokeInviteError,
 };
@@ -6,74 +7,79 @@ use crate::{
     audit::Event,
     context::{Context, begin},
 };
-use domain::{ActorId, Capability, InviteId, InviteKind, OrganizationId, OrganizationRole};
+use domain::{ActorId, Capability, InviteId, InviteKind, OrganizationId};
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Access {
-    Allowed,
-    Forbidden,
-    NotAMember,
-}
-
-pub async fn can(
-    pool: &PgPool,
-    actor: ActorId,
-    organization: OrganizationId,
-    capability: Capability,
-) -> Result<Access, AccessError> {
-    let mut tx = begin(pool, Context::Actor(actor)).await?;
-    let row = sqlx::query!("SELECT role FROM organization_members WHERE organization_id = $1 AND actor_id = $2 AND status = 'active'", organization.0, actor.0)
-        .fetch_optional(&mut *tx).await?;
-    let access = match row {
-        None => Access::NotAMember,
-        Some(row) => {
-            let role = OrganizationRole::parse(&row.role)
-                .ok_or(sqlx::Error::Protocol("invalid organization role".into()))?;
-            if role.holds(capability) {
-                Access::Allowed
-            } else {
-                Access::Forbidden
-            }
-        }
-    };
-    tx.commit().await?;
-    Ok(access)
-}
-
-pub async fn create_invite(
+/// `new_token` is called only once the capability is granted, as `sign_in` calls its own
+/// only once the credential is accepted: a caller without `InviteMember` is 404 or 403
+/// even when the RNG would fail, and a refused request makes no token.
+pub async fn create_invite<T: Send>(
     pool: &PgPool,
     performed_by: ActorId,
     organization: OrganizationId,
-    token_hash: &TokenHash,
+    new_token: impl FnOnce() -> Option<(T, TokenHash)> + Send,
     expires_at: OffsetDateTime,
     max_uses: i32,
-) -> Result<InviteId, CreateInviteError> {
+) -> Result<(InviteId, T), CreateInviteError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     super::lock_actor(&mut tx, performed_by, performed_by).await?;
+    if !super::lock_organization(&mut tx, organization, super::OrganizationLock::Share).await? {
+        return Err(CreateInviteError::NotAMember);
+    }
+    match authorize(
+        &mut tx,
+        performed_by,
+        organization,
+        Capability::InviteMember,
+    )
+    .await?
+    {
+        Access::Allowed => {}
+        Access::Forbidden => return Err(CreateInviteError::Forbidden),
+        Access::NotAMember => return Err(CreateInviteError::NotAMember),
+    }
+    let (token, token_hash) = new_token().ok_or(CreateInviteError::TokenUnavailable)?;
     let id = InviteId(Uuid::now_v7());
     let inserted = sqlx::query!("INSERT INTO invites (id, organization_id, kind, token_hash, expires_at, max_uses, created_by_actor_id) SELECT $1, id, 'organization', $3, $4, $5, $6 FROM organizations WHERE id = $2 RETURNING id", id.0, organization.0, token_hash.as_str(), expires_at, max_uses, performed_by.0)
         .fetch_optional(&mut *tx).await?;
     if inserted.is_none() {
-        return Err(CreateInviteError::NotFound);
+        return Err(CreateInviteError::NotAMember);
     }
     Event::invite_created(organization, id, max_uses)
         .write(&mut tx, organization, performed_by)
         .await?;
     tx.commit().await?;
-    Ok(id)
+    Ok((id, token))
 }
 
+/// `invite` is `None` when the path did not hold a UUID. It is still decided after the
+/// capability, so a malformed invite id cannot hide a 404 or 403 for the caller.
 pub async fn revoke_invite(
     pool: &PgPool,
     performed_by: ActorId,
     organization: OrganizationId,
-    invite: InviteId,
+    invite: Option<InviteId>,
 ) -> Result<(), RevokeInviteError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     super::lock_actor(&mut tx, performed_by, performed_by).await?;
+    if !super::lock_organization(&mut tx, organization, super::OrganizationLock::Share).await? {
+        return Err(RevokeInviteError::NotAMember);
+    }
+    match authorize(
+        &mut tx,
+        performed_by,
+        organization,
+        Capability::InviteMember,
+    )
+    .await?
+    {
+        Access::Allowed => {}
+        Access::Forbidden => return Err(RevokeInviteError::Forbidden),
+        Access::NotAMember => return Err(RevokeInviteError::NotAMember),
+    }
+    let invite = invite.ok_or(RevokeInviteError::NotFound)?;
     let row = sqlx::query!(
         "SELECT revoked_at FROM invites WHERE organization_id = $1 AND id = $2 FOR UPDATE",
         organization.0,

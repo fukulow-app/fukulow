@@ -16,7 +16,7 @@ pub async fn create_channel(
 ) -> Result<ChannelId, CreateChannelError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(CreateChannelError::NotFound);
     }
     let team_id = match scope {
@@ -59,7 +59,7 @@ pub async fn add_channel_member(
 ) -> Result<(), AddChannelMemberError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     let departed = lock_actor(&mut tx, actor_id, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(AddChannelMemberError::NotFound);
     }
     let row = sqlx::query!(
