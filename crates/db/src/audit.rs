@@ -1,5 +1,6 @@
 use domain::{
-    ActorId, ChannelId, ChannelScope, OrganizationId, OrganizationRole, TeamId, TeamRole,
+    ActorId, ChannelId, ChannelScope, InviteId, InviteKind, OrganizationId, OrganizationRole,
+    TeamId, TeamRole,
 };
 use serde_json::{Value, json};
 use sqlx::PgConnection;
@@ -19,6 +20,35 @@ pub(crate) struct Event {
 }
 
 impl Event {
+    pub(crate) fn invite_created(
+        organization: OrganizationId,
+        invite: InviteId,
+        max_uses: i32,
+    ) -> Self {
+        Self {
+            action: "invite.created",
+            target_type: "organization",
+            target_id: organization.0,
+            metadata: json!({"invite_id": invite.0, "kind": InviteKind::Organization.as_str(), "max_uses": max_uses}),
+        }
+    }
+    pub(crate) fn invite_revoked(organization: OrganizationId, invite: InviteId) -> Self {
+        Self {
+            action: "invite.revoked",
+            target_type: "organization",
+            target_id: organization.0,
+            metadata: json!({"invite_id": invite.0}),
+        }
+    }
+    pub(crate) fn member_invited(actor: ActorId, invite: InviteId) -> Self {
+        Self {
+            action: "organization.member.added",
+            target_type: "actor",
+            target_id: actor.0,
+            metadata: json!({"role": OrganizationRole::Member.as_str(), "invite_id": invite.0}),
+        }
+    }
+
     pub(crate) fn organization_created(id: OrganizationId) -> Self {
         Self {
             action: "organization.created",

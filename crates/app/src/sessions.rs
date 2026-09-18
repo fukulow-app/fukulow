@@ -23,6 +23,8 @@ pub(crate) struct StateData {
     pub(crate) origin: String,
     pub(crate) new_token: TokenGenerator,
     pub(crate) now: fn() -> OffsetDateTime,
+    pub(crate) new_invite_token: crate::invites::TokenGenerator,
+    pub(crate) hash_invite_password: std::sync::Arc<crate::invites::PasswordHasher>,
 }
 
 impl StateData {
@@ -31,6 +33,8 @@ impl StateData {
             pool,
             origin,
             new_token: auth::new_session_token,
+            new_invite_token: auth::new_invite_token,
+            hash_invite_password: std::sync::Arc::new(auth::hash_password),
             now: OffsetDateTime::now_utc,
         }
     }

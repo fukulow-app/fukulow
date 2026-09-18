@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub(crate) mod invites;
 pub(crate) mod sessions;
 
 use domain::{ActorId, OrganizationId};

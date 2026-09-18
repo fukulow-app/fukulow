@@ -12,6 +12,20 @@ macro_rules! identifier {
 identifier!(ActorId);
 identifier!(OrganizationId);
 identifier!(TeamId);
+identifier!(InviteId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    InviteMember,
+}
+
+impl OrganizationRole {
+    pub const fn holds(self, capability: Capability) -> bool {
+        match capability {
+            Capability::InviteMember => matches!(self, Self::Owner | Self::Admin),
+        }
+    }
+}
 
 macro_rules! enumeration {
     ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
@@ -37,6 +51,7 @@ enumeration!(ActorType { Human => "human", Bot => "bot", Integration => "integra
 enumeration!(OrganizationRole { Owner => "owner", Admin => "admin", Member => "member" });
 enumeration!(MemberStatus { Active => "active", Suspended => "suspended", Left => "left" });
 enumeration!(TeamRole { Manager => "manager", Member => "member" });
+enumeration!(InviteKind { Organization => "organization", Team => "team" });
 
 #[derive(Debug, Clone, Copy)]
 pub enum OwnerChange {

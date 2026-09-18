@@ -1,5 +1,6 @@
 mod config;
 mod http;
+mod invites;
 mod sessions;
 mod shutdown;
 mod telemetry;

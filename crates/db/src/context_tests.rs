@@ -70,7 +70,7 @@ async fn context_values(
 mod support;
 
 #[tokio::test]
-async fn invite_context_creates_a_person_but_admits_no_membership_yet() -> Result {
+async fn invite_context_creates_a_person_but_requires_a_use_before_membership() -> Result {
     let db = support::Database::new().await?;
     let a = support::Conversation::new(&db).await?;
     let b = support::Conversation::new(&db).await?;
@@ -108,8 +108,7 @@ async fn invite_context_creates_a_person_but_admits_no_membership_yet() -> Resul
         "42501",
     );
     attempt.rollback().await?;
-    // Even the invite's own organization is refused: #3 adds the invite branch together with a
-    // database-side tie to a successful use of the invite in the same transaction.
+    // Presenting a hash alone cannot admit a member, even in the invite's own organization.
     let mut attempt = tx.begin().await?;
     support::rejected(
         sqlx::query("INSERT INTO organization_members (organization_id, actor_id) VALUES ($1, $2)")

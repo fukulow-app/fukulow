@@ -99,3 +99,48 @@ people can hold browser sessions; non-person route access awaits non-browser
 credentials. Authentication produces an actor in one extractor. Handlers use
 that actor; only sign-out and the future WebSocket handler consume the private
 current-session hash.
+
+## Organization invites
+
+| Route | Input | Success | Errors in decision order |
+|---|---|---|---|
+| `POST /api/v1/organizations/{organization_id}/invites` | Session cookie; JSON object with required `expires_in` and optional `max_uses` | 201 with `id`, `token`, `link`, `expires_at`, `max_uses` | Origin 403; session 401; body 422; active membership 404; `InviteMember` 403; operation 500 |
+| `DELETE /api/v1/organizations/{organization_id}/invites/{id}` | Session cookie | 204; already revoked also succeeds without another audit | Origin 403; session 401; active membership 404; `InviteMember` 403; invite in this organization 404; operation 500 |
+| `POST /api/v1/invite-acceptances` | JSON object with `token`, `email`, `password`, `display_name` | 204, no body or session | Origin 403; body/token shape 422; unusable token 404; remaining fields 422; unusable at conditional use 404; email already registered 409; operation 500 |
+
+A path identifier that is not a UUID is answered exactly as one that exists nowhere:
+404 at the step that looks it up, with no body. UUID syntax is the hyphenated
+36-character form, in either case. Thus a malformed organization id does not take
+precedence over a missing session or invalid creation body. A malformed invite id
+is checked after organization membership and capability.
+
+`expires_in` is an integer number of seconds, from 300 through 604800 (five minutes
+through seven days). `max_uses` is an integer from 1 through 100; only omission
+defaults to 1. Fractions, floating-point JSON numbers, strings and null are refused.
+`expires_at` is RFC 3339 in UTC with a `Z` suffix, and ids are JSON strings.
+
+Acceptance parses JSON regardless of Content-Type. The body must be an object with
+a string `token`. A read-only pre-check then rejects every unknown, expired,
+revoked, exhausted or non-organization invite with the same empty 404, before
+reading any other field. Unusable tokens incur no password hash. With a usable
+token, the remaining fields must be strings:
+
+- `email`: 3–254 bytes, exactly one `@`, no Unicode whitespace or U+0000. Not trimmed.
+- `password`: at least eight Unicode scalar values and at most 1024 bytes. Not
+  trimmed; U+0000 is permitted because only its hash is stored.
+- `display_name`: trim Unicode whitespace at both ends, then require 1–80 Unicode
+  scalar values and no U+0000. Store the trimmed value.
+
+Password hashing runs outside all transactions on a blocking worker. The acceptance
+transaction conditionally increments `used_count` and alone decides whether a place
+remains. A duplicate email rolls back the use and every insert. Acceptance creates
+an active member and records the invite in the membership audit; it does not sign
+anyone in. The 409 reveals registration only to a usable-token holder, an accepted
+v0.1 tradeoff; rate limiting is still planned.
+
+The returned link is `{FUKULOW_PUBLIC_ORIGIN}/invite#<token>`. Only the configured
+origin is used, never Host, X-Forwarded-Host or Forwarded. The token is returned once
+at creation and stored only as a hash. A URL fragment never reaches the server;
+the client reads it and posts the token in the acceptance body. No route accepts a
+token from a path or query string. Sending email and admitting an existing account
+to another organization are outside this contract.

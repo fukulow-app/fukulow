@@ -41,7 +41,9 @@ say which item. Do not comment when it does not.
   its absence. Do not flag `leave_service` reading the acting actor's own
   `organization_members` and `channel_members` rows by `actor_id` alone: it is the one
   service-wide exception in `AGENTS.md`, and its writes are scoped by the
-  `organization_id` those rows name.
+  `organization_id` those rows name. The second exception is invite acceptance's
+  pre-check and conditional use by globally unique token hash, before an organization
+  is known; every following write is scoped by the returned `organization_id`.
 - **Flag** authorship, membership or an audit record that references `users` rather
   than `actors`. Every operation is performed by an actor; `users` holds a person's
   personal data (email address, password) keyed by their actor.
@@ -51,7 +53,8 @@ say which item. Do not comment when it does not.
 ## Authorization
 
 - **Flag** a route that reads or changes a protected resource without using
-  `is_organization_member` or `can_access_channel`. Using both is allowed.
+  `is_organization_member`, `can_access_channel`, or `can` (which checks active
+  organization membership before its capability table). Combining them is allowed.
   Operational routes such as `/health` are not flagged.
 - **Flag** the contents of a **team-scoped** channel guarded by organization
   membership. That locks out members from outside the organization, whom the model

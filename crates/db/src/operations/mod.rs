@@ -60,3 +60,6 @@ async fn lock_actor(
 
 mod sessions;
 pub use sessions::{DUMMY_PASSWORD_HASH, Me, me, resolve_session, revoke_session, sign_in};
+
+mod invites;
+pub use invites::{Access, accept_invite, can, create_invite, invite_is_usable, revoke_invite};

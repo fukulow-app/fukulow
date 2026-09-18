@@ -15,7 +15,7 @@ How the code is divided, and which way the divisions may depend on each other.
 
 `domain` owns canonical names, not formats. `db` adopts them as stored values, held
 equal to the database's `CHECK` by a test; whether the wire uses them is for the
-caller that maps to `protocol` (#3, #6).
+caller that maps to `protocol` (message frames arrive with #6).
 
 Each library crate's `//!` documentation says the same, so the boundary is
 visible from the code as well. `app` is the binary and has none.

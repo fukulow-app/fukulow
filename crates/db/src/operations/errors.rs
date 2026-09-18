@@ -90,3 +90,8 @@ operation_error!(SignInError {
     TokenUnavailable => "session token could not be generated"
 });
 operation_error!(SessionError { NoSession => "no session" });
+
+operation_error!(AccessError {});
+operation_error!(CreateInviteError { NotFound => "organization not found" });
+operation_error!(RevokeInviteError { NotFound => "invite not found" });
+operation_error!(AcceptInviteError { InviteUnusable => "invite unusable", EmailTaken => "email is already registered" });

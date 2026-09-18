@@ -1,3 +1,5 @@
+#[path = "../src/invites.rs"]
+mod invites;
 mod support;
 
 // Reuse the production lifecycle without exposing test routes in the application.

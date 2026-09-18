@@ -3,6 +3,8 @@ mod database;
 #[allow(dead_code)]
 #[path = "../src/http.rs"]
 mod http;
+#[path = "../src/invites.rs"]
+mod invites;
 mod session_support;
 #[path = "../src/sessions.rs"]
 mod sessions;

@@ -27,7 +27,11 @@ wrong.
   signing in and other identity lookups need none. **One service-wide exception**:
   leaving the service enumerates the acting actor's own organization memberships and
   channel listings by `actor_id` alone, to discover which organizations it belongs to;
-  every write after that is scoped by the `organization_id` it found. Never write application SQL outside the `db` crate —
+  every write after that is scoped by the `organization_id` it found.
+  **A second exception**: invite acceptance's pre-check and conditional use
+  look up an invite by its globally unique token hash before an organization is known;
+  every following write is scoped by the returned `organization_id`.
+  Never write application SQL outside the `db` crate —
   migrations are the exception
 - **Never point authorship, membership or audit at `users`.** They reference
   `actors`. `users` holds a person's email address and password. **Display names are
