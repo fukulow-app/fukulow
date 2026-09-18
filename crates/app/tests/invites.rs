@@ -110,6 +110,8 @@ fn valid(token: &str) -> Value {
         "joiner@example.invalid",
         PASSWORD,
         "  Fixture joiner\u{2003}",
+        // Acceptance trims the display name; the stored form must be caught as well.
+        "Fixture joiner",
     ] {
         session_support::register_secret(value);
     }
@@ -554,6 +556,12 @@ async fn acceptance_bounds_use_bytes_scalars_and_trim_only_the_display_name() ->
         body[field] = json!(value);
         for key in ["email", "password", "display_name"] {
             session_support::register_secret(body[key].as_str().unwrap());
+        }
+        // Acceptance trims the display name, so its stored form is registered too, except
+        // the one-character minimum under test here: it would match unrelated log text.
+        let trimmed = body["display_name"].as_str().unwrap().trim();
+        if trimmed.chars().count() > 1 {
+            session_support::register_secret(trimmed);
         }
         no_authority(&f.accept(body.clone()).await?);
         let stored = fixtures::joined(&f.db, f.org, body["email"].as_str().unwrap()).await?;

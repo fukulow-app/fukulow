@@ -217,8 +217,10 @@ pub(crate) fn register_secret(value: &str) {
 
 pub(crate) fn scan_logs() {
     // Release both locks before asserting: a caught failure must not poison later scans.
-    let secrets = secrets().lock().unwrap().clone();
+    // Logs first: a value is registered before it can be logged, so every secret in this
+    // log snapshot is already in the registry snapshot taken after it.
     let bytes = logs().lock().unwrap().clone();
+    let secrets = secrets().lock().unwrap().clone();
     let logs = String::from_utf8_lossy(&bytes).to_lowercase();
     assert!(logs.contains("session test log capture active"));
     assert!(
