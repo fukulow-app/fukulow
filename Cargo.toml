@@ -19,8 +19,8 @@ repository = "https://github.com/fukulow-app/fukulow"
 [workspace.dependencies]
 # Workspace members. Cargo rejects a cycle, so reversing an existing edge fails to
 # build. It does not reject a new edge that forms no cycle -- domain depending on
-# protocol builds, and is still forbidden. The full direction is in
-# docs/architecture/overview.md and is checked in review until a test checks it.
+# protocol builds, and is still forbidden. deny.toml holds the allowed list, checked
+# by the audit job; docs/architecture/overview.md shows the direction.
 protocol = { path = "crates/protocol" }
 domain = { path = "crates/domain" }
 db = { path = "crates/db" }

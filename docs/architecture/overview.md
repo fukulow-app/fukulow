@@ -43,8 +43,14 @@ it.** Cargo rejects a cycle, so *reversing an existing edge* fails to build —
 `domain` depending on `db`, for example, because `db` already depends on `domain`.
 
 **Cargo does not reject a new edge that forms no cycle.** `domain` depending on
-`protocol` builds without complaint, and is still forbidden. Those are caught in
-review until a test checks the dependency graph against this one (#21).
+`protocol` builds without complaint, and is still forbidden. **Enforcement is in
+place:** [`deny.toml`](../../deny.toml)'s `[bans]` list holds the allowed direct
+parents of each library crate. The required `audit` job runs `cargo deny check
+licenses bans sources` to enforce it, including dev-dependencies and optional or
+feature-gated dependencies through `[graph] all-features = true`.
+
+An allowed edge need not be present. A new workspace member must be added to the
+list when it is introduced: a member with no entry is unrestricted as a dependency.
 
 ## Where types are documented
 
