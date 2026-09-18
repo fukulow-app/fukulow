@@ -84,3 +84,9 @@ operation_error!(AddChannelMemberError {
 operation_error!(PostMessageError { NotFound => "channel not found", IdConflict => "message id conflict", InvalidBody => "invalid message body" });
 operation_error!(MessagesBeforeError { NotFound => "channel not found" });
 operation_error!(MessagesAfterError { NotFound => "channel not found" });
+
+operation_error!(SignInError {
+    InvalidCredentials => "invalid credentials",
+    TokenUnavailable => "session token could not be generated"
+});
+operation_error!(SessionError { NoSession => "no session" });

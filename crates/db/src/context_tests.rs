@@ -18,31 +18,52 @@ async fn pool() -> std::result::Result<PgPool, Box<dyn std::error::Error + Send 
 }
 
 #[tokio::test]
-async fn actor_and_invite_contexts_do_not_survive_commit_or_rollback() -> Result {
+async fn every_context_sets_only_its_setting_and_does_not_survive_commit_or_rollback() -> Result {
     let pool = pool().await?;
     let actor = ActorId(Uuid::now_v7());
+    let hash = "a".repeat(64);
+    let email = "fixture@example.invalid";
     for commit in [true, false] {
-        let hash = "a".repeat(64);
-        for context in [
-            Context::Actor(actor),
-            Context::InviteToken(TokenHash::from_hex(hash.clone())?),
+        for (context, expected) in [
+            (
+                Context::Actor(actor),
+                [Some(actor.0.to_string()), None, None, None],
+            ),
+            (
+                Context::InviteToken(TokenHash::from_hex(hash.clone())?),
+                [None, Some(hash.clone()), None, None],
+            ),
+            (
+                Context::SessionToken(TokenHash::from_hex(hash.clone())?),
+                [None, None, Some(hash.clone()), None],
+            ),
+            (
+                Context::SignInEmail(email),
+                [None, None, None, Some(email.to_owned())],
+            ),
         ] {
             let mut tx = begin(&pool, context).await?;
-            let values: (Option<String>, Option<String>) = sqlx::query_as("SELECT nullif(current_setting('fukulow.actor_id', true), ''), nullif(current_setting('fukulow.invite_token_hash', true), '')").fetch_one(&mut *tx).await?;
-            assert!(values.0 == Some(actor.0.to_string()) || values.1 == Some(hash.clone()));
+            assert_eq!(context_values(&mut tx).await?, expected);
             if commit {
                 tx.commit().await?;
             } else {
                 tx.rollback().await?;
             }
-            let mut next = begin(&pool, Context::SignInEmail("fixture@example.invalid")).await?;
-            let empty: bool = sqlx::query_scalar("SELECT nullif(current_setting('fukulow.actor_id', true), '') IS NULL AND nullif(current_setting('fukulow.invite_token_hash', true), '') IS NULL").fetch_one(&mut *next).await?;
-            assert!(empty);
+            let mut connection = pool.acquire().await?;
+            let mut next = connection.begin().await?;
+            assert_eq!(context_values(&mut next).await?, [None, None, None, None]);
             next.commit().await?;
         }
     }
     pool.close().await;
     Ok(())
+}
+
+async fn context_values(
+    conn: &mut PgConnection,
+) -> std::result::Result<[Option<String>; 4], sqlx::Error> {
+    let values: (Option<String>, Option<String>, Option<String>, Option<String>) = sqlx::query_as("SELECT nullif(current_setting('fukulow.actor_id', true), ''), nullif(current_setting('fukulow.invite_token_hash', true), ''), nullif(current_setting('fukulow.session_token_hash', true), ''), nullif(current_setting('fukulow.sign_in_email', true), '')").fetch_one(conn).await?;
+    Ok([values.0, values.1, values.2, values.3])
 }
 
 #[path = "../tests/support/mod.rs"]

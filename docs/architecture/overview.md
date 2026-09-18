@@ -59,9 +59,13 @@ document to fall behind the code. `cargo doc --open` is the reference.
 
 ## Request flow
 
-**Not written yet.** The only route today is `/health`, which touches nothing.
-This section is filled in when messages are sent and received (#6) — describing
-the flow before it exists would describe code nobody has written.
+HTTP middleware checks `Origin` before extraction on state-changing requests.
+`Authenticated` reads the session cookie, hashes its token and resolves it to an
+actor through `db`. Handlers use that actor in their own transactions; sign-out
+also consumes the private current-session hash. Password verification runs on a
+blocking worker while the sign-in transaction stays open. `/health` touches no
+protected resource. The [HTTP contract](../HTTP.md) specifies carriers and errors;
+message and WebSocket flow follows when those routes arrive (#6).
 
 ## Where things are decided
 

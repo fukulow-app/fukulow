@@ -33,6 +33,7 @@ macro_rules! enumeration {
         }
     };
 }
+enumeration!(ActorType { Human => "human", Bot => "bot", Integration => "integration", System => "system" });
 enumeration!(OrganizationRole { Owner => "owner", Admin => "admin", Member => "member" });
 enumeration!(MemberStatus { Active => "active", Suspended => "suspended", Left => "left" });
 enumeration!(TeamRole { Manager => "manager", Member => "member" });

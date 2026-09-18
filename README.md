@@ -53,6 +53,18 @@ content-type: application/json
 {"status":"ok"}
 ```
 
+`FUKULOW_PUBLIC_ORIGIN` is required, with no default. Set it to the browser's
+origin, such as `https://chat.example.com`, including a port when needed. Paths,
+trailing slashes, queries, fragments and credentials are refused, and so is any
+form a browser does not send: an upper-case scheme or host, or the scheme's
+default port written out. Startup requires
+HTTPS because the `Secure` session cookie cannot work on insecure LAN origins.
+Development may use `http://localhost`, `http://127.0.0.1` or `http://[::1]`, with
+any port. Chromium was measured to accept the cookie on loopback HTTP; Firefox
+and Safari were not measured. A browser that refuses it on `http://localhost`
+needs a local HTTPS origin. See [the HTTP contract](docs/HTTP.md) for sign-in,
+the persistent session cookie and the required `Origin` header.
+
 `DATABASE_URL` is required. Startup opens a pool and checks PostgreSQL with a
 round trip; failures name the variable without disclosing its value. The server
 connects as `fukulow_app` and never runs migrations. The migrator owns the tables

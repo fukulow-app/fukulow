@@ -3,6 +3,8 @@ mod support;
 // Reuse the production lifecycle without exposing test routes in the application.
 #[path = "../src/http.rs"]
 mod http;
+#[path = "../src/sessions.rs"]
+mod sessions;
 #[path = "../src/shutdown.rs"]
 mod shutdown;
 #[path = "../src/telemetry.rs"]
@@ -18,6 +20,7 @@ fn command() -> Command {
     command
         .env("FUKULOW_BIND_ADDR", "127.0.0.1:0")
         .env("RUST_LOG", "info")
+        .env("FUKULOW_PUBLIC_ORIGIN", "http://localhost:8080")
         .env_remove("INSPECTOR_DATABASE_URL");
     command
 }
@@ -95,7 +98,12 @@ fn held_request_process() -> Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let routes = http::routes().route("/hold", axum::routing::post(held_request));
+        let pool = db::connect(&std::env::var("DATABASE_URL")?).await?;
+        let routes = http::routes(sessions::StateData::new(
+            pool,
+            "http://localhost:8080".into(),
+        ))
+        .route("/hold", axum::routing::post(held_request));
         http::run(([127, 0, 0, 1], 0).into(), routes).await
     })
 }
@@ -216,5 +224,134 @@ fn inspector_configuration_refuses_startup_without_disclosing_its_value() -> Res
     let logs = app.remaining_logs();
     assert!(logs.contains("INSPECTOR_DATABASE_URL"));
     assert!(!logs.contains("inspection-fixture-marker"));
+    Ok(())
+}
+
+#[test]
+fn public_origin_is_required_and_invalid_values_are_not_disclosed() -> Result<()> {
+    let mut missing = command();
+    missing.env_remove("FUKULOW_PUBLIC_ORIGIN");
+    let mut app = AppProcess::spawn_configured(missing)?;
+    assert!(!app.wait_for_exit()?.success());
+    assert!(
+        app.remaining_logs()
+            .contains("FUKULOW_PUBLIC_ORIGIN is required")
+    );
+    for rejected in [
+        "http://192.0.2.1",
+        "http://chat.example.invalid",
+        "ftp://localhost",
+        "https://chat.example.invalid/",
+        "https://chat.example.invalid/path",
+        "https://chat.example.invalid?query",
+        "https://chat.example.invalid#fragment",
+        "https://fixture@chat.example.invalid",
+        "https://chat.example.invalid:invalid",
+        "https://chat.example.invalid:65536",
+        "https://",
+        "not-an-origin",
+        // Non-canonical forms a browser never sends: the Origin check compares bytes.
+        "https://Chat.Example.Invalid",
+        "HTTPS://chat.example.invalid",
+        "https://chat.example.invalid:443",
+        "http://LOCALHOST:8080",
+        "http://localhost:80",
+        "https://chat.example.invalid:08443",
+        "http://localhost:0080",
+    ] {
+        let mut command = command();
+        command.env("FUKULOW_PUBLIC_ORIGIN", rejected);
+        let mut app = AppProcess::spawn_configured(command)?;
+        assert!(!app.wait_for_exit()?.success());
+        let logs = app.remaining_logs();
+        assert!(logs.contains("FUKULOW_PUBLIC_ORIGIN"));
+        assert!(
+            logs.contains("must contain")
+                || logs.contains("requires HTTPS")
+                || logs.contains("must be written as a browser sends it")
+        );
+        assert!(!logs.contains(rejected));
+    }
+    Ok(())
+}
+
+#[test]
+fn secure_and_loopback_public_origins_start() -> Result<()> {
+    for accepted in [
+        "https://chat.example.invalid",
+        "https://chat.example.invalid:8443",
+        "http://localhost",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://[::1]:8080",
+    ] {
+        let mut command = command();
+        command.env("FUKULOW_PUBLIC_ORIGIN", accepted);
+        let app = AppProcess::spawn_configured(command)?;
+        support::health(app.address()?)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn session_routes_reject_before_handlers() -> Result<()> {
+    use std::io::{Read, Write};
+    let app = AppProcess::spawn(command())?;
+    let address = app.address()?;
+    let mut statuses = Vec::new();
+    for (method, path, origin, body) in [
+        ("GET", "/api/v1/me", "", ""),
+        ("POST", "/api/v1/sessions", "", "{}"),
+        (
+            "POST",
+            "/api/v1/sessions",
+            "Origin: http://localhost:8080\r\n",
+            "{}",
+        ),
+    ] {
+        let mut stream = support::connect(address)?;
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{origin}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response)?;
+        statuses.push(response.split_whitespace().nth(1).unwrap().to_owned());
+        assert!(response.split_once("\r\n\r\n").unwrap().1.is_empty());
+    }
+    assert_eq!(statuses, ["401", "403", "422"]);
+    Ok(())
+}
+
+#[test]
+fn unrouted_state_changing_requests_check_origin_first() -> Result<()> {
+    use std::io::{Read, Write};
+    let app = AppProcess::spawn(command())?;
+    let address = app.address()?;
+    for method in ["POST", "PUT", "PATCH", "DELETE"] {
+        for (origin, expected) in [
+            ("", "403"),
+            ("Origin: https://foreign.example.invalid\r\n", "403"),
+            ("Origin: http://localhost:8080\r\n", "404"),
+        ] {
+            let mut stream = support::connect(address)?;
+            write!(
+                stream,
+                "{method} /api/v1/does-not-exist HTTP/1.1\r\nHost: localhost\r\n{origin}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            )?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            assert_eq!(
+                response.split_whitespace().nth(1),
+                Some(expected),
+                "{method} with {origin:?}"
+            );
+            assert!(
+                response.split_once("\r\n\r\n").unwrap().1.is_empty(),
+                "{method} with {origin:?}"
+            );
+        }
+    }
     Ok(())
 }
