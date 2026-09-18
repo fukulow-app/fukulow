@@ -79,8 +79,13 @@ impl Fixture {
         let response = self
             .request("POST", invites::ACCEPT_PATH, &body.to_string())
             .await?;
+        // A malformed field such as `"email": "bad"` is not a secret, and a short hex-only
+        // value would match random hex in another test's log line (#56).
         for key in ["token", "email", "password"] {
-            if let Some(value) = body[key].as_str().filter(|s| !s.is_empty()) {
+            if let Some(value) = body[key]
+                .as_str()
+                .filter(|s| session_support::distinctive(s))
+            {
                 assert_no_secrets(&[value]);
             }
         }
@@ -385,6 +390,30 @@ async fn revocation_is_scoped_even_for_an_owner_of_both_organizations() -> Resul
     assert_eq!(f.db.audit(f.org).await?, audits_a);
     assert_eq!(f.db.audit(other).await?, audits_b);
     assert_no_secrets(&[token.as_str()]);
+    f.finish().await
+}
+
+/// #56: the check refuses a value that could match log noise, so a caller cannot make it
+/// flaky again by passing one. It panics before taking the shared lock, poisoning nothing.
+#[test]
+#[should_panic(expected = "not a checkable secret")]
+fn a_short_hex_only_value_is_refused_as_a_secret() {
+    assert_no_secrets(&["bad"]);
+}
+
+/// #56: the log capture is shared by every test in this binary and holds the harness's
+/// throwaway database names, which are random hex. A malformed field such as
+/// `"email": "bad"` was scanned as a secret and matched one of them by chance.
+#[tokio::test]
+async fn a_short_hex_only_field_is_not_scanned_as_a_secret() -> Result {
+    let f = Fixture::new(|_| {}).await?;
+    assert_no_secrets(&[EMAIL]);
+    // Stands in for another test's database name that happens to contain `bad`.
+    tracing::info!("DROP DATABASE fukulow_test_01a0bad5c0ffee");
+    let (token, _) = auth::new_invite_token()?;
+    f.accept(json!({"token": token.as_str(), "email": "bad"}))
+        .await?
+        .assert_error(404);
     f.finish().await
 }
 

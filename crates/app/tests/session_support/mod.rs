@@ -155,7 +155,20 @@ fn logs() -> &'static Arc<Mutex<Vec<u8>>> {
         buffer
     })
 }
+/// Whether finding `value` in the logs would mean anything. The capture is shared by every
+/// test in the binary and holds the harness's throwaway database names, which are random
+/// hex; a short hex-only value turns up in them by chance, so it proves nothing (#56).
+pub(crate) fn distinctive(value: &str) -> bool {
+    value.len() >= 16 || !value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 pub(crate) fn assert_no_secrets(secrets: &[&str]) {
+    for secret in secrets {
+        assert!(
+            distinctive(secret),
+            "a short hex-only value can appear in unrelated log text; it is not a checkable secret"
+        );
+    }
     let bytes = logs().lock().unwrap();
     let logs = String::from_utf8_lossy(&bytes);
     assert!(logs.contains("session test log capture active"));
