@@ -259,7 +259,14 @@ impl LintAttributes {
 /// `#[cfg(test)]` on an item: clippy treats it as test code, and so does this rule.
 fn is_test_only(attributes: &[Attribute]) -> bool {
     attributes.iter().any(|attribute| match &attribute.meta {
-        Meta::List(list) => list.path.is_ident("cfg") && list.tokens.to_string() == "test",
+        // Parsed, not compared as text: `#[cfg(test,)]` is the same predicate as
+        // `#[cfg(test)]`, and `#[cfg(not(test))]` is not test code at all.
+        Meta::List(list) if list.path.is_ident("cfg") => list
+            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            .is_ok_and(|predicates| {
+                predicates.len() == 1
+                    && matches!(predicates.first(), Some(Meta::Path(path)) if path.is_ident("test"))
+            }),
         _ => false,
     })
 }
@@ -386,7 +393,15 @@ fn lint_attributes_are_read_as_syntax() -> Result<(), Box<dyn Error>> {
             "{source:?}"
         );
     }
-    // A test module is test code: its attributes are not production exceptions.
-    assert!(LintAttributes::of("#[cfg(test)] mod tests { #![allow(clippy::panic)] }")?.is_empty());
+    // A test module is test code: its attributes are not production exceptions, however
+    // the predicate is spelled. `not(test)` is production.
+    for test_only in ["#[cfg(test)]", "#[cfg(test,)]", "#[cfg( test )]"] {
+        let source = format!("{test_only} mod tests {{ #![allow(clippy::panic)] }}");
+        assert!(LintAttributes::of(&source)?.is_empty(), "{source}");
+    }
+    assert_eq!(
+        LintAttributes::of("#[cfg(not(test))] mod live { #![allow(clippy::panic)] }")?.len(),
+        1
+    );
     Ok(())
 }
