@@ -17,6 +17,12 @@ mod http;
 mod invites;
 #[expect(
     dead_code,
+    reason = "The session test binary runs the route contract sweep"
+)]
+#[path = "../src/route_registry.rs"]
+mod route_registry;
+#[expect(
+    dead_code,
     reason = "Invite tests use only part of the session test support"
 )]
 mod session_support;
@@ -90,7 +96,7 @@ impl Fixture {
     }
     async fn accept(&self, body: Value) -> Result<Response> {
         let response = self
-            .request("POST", invites::ACCEPT_PATH, &body.to_string())
+            .request("POST", route_registry::ACCEPT_PATH, &body.to_string())
             .await?;
         // A malformed field such as `"email": "bad"` is not a secret, and a short hex-only
         // value would match random hex in another test's log line (#56).
@@ -264,7 +270,7 @@ async fn origin_session_body_membership_capability_and_path_checks_are_ordered()
             f.server
                 .request(
                     "POST",
-                    invites::ACCEPT_PATH,
+                    route_registry::ACCEPT_PATH,
                     origin,
                     None,
                     &valid(&token).to_string(),
@@ -482,7 +488,7 @@ async fn acceptance_body_shape_token_and_field_types_are_checked_in_order() -> R
         "{\"token\":1}",
     ] {
         for content_type in ["application/json", "text/plain", ""] {
-            f.server.raw(format!("POST {} HTTP/1.1\r\nHost: localhost\r\nOrigin: {ORIGIN}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", invites::ACCEPT_PATH, body.len())).await?.assert_error(422);
+            f.server.raw(format!("POST {} HTTP/1.1\r\nHost: localhost\r\nOrigin: {ORIGIN}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", route_registry::ACCEPT_PATH, body.len())).await?.assert_error(422);
         }
     }
     let (token, id) = f.token(100).await?;
@@ -645,7 +651,13 @@ async fn precheck_is_only_a_filter_and_hashing_holds_no_transaction_or_invite_lo
         let body = valid(&token).to_string();
         let request = tokio::spawn(async move {
             server
-                .request("POST", invites::ACCEPT_PATH, Some(ORIGIN), None, &body)
+                .request(
+                    "POST",
+                    route_registry::ACCEPT_PATH,
+                    Some(ORIGIN),
+                    None,
+                    &body,
+                )
                 .await
         });
         tokio::time::timeout(std::time::Duration::from_secs(5), reached.notified()).await?;
@@ -706,7 +718,7 @@ async fn twenty_concurrent_acceptances_admit_exactly_one_person() -> Result {
             server
                 .request(
                     "POST",
-                    invites::ACCEPT_PATH,
+                    route_registry::ACCEPT_PATH,
                     Some(ORIGIN),
                     None,
                     &body.to_string(),
@@ -747,29 +759,20 @@ async fn twenty_concurrent_acceptances_admit_exactly_one_person() -> Result {
 
 #[tokio::test]
 async fn registered_invite_routes_are_versioned_and_take_no_token_path_or_query() -> Result {
-    let routes: Vec<_> = include_str!("../src/invites.rs")
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with(".route("))
+    let routes: Vec<_> = route_registry::ROUTES
+        .iter()
+        .filter(|route| route.path.contains("invite"))
+        .map(|route| (route.method.as_str(), route.path))
         .collect();
     assert_eq!(
         routes,
         [
-            ".route(CREATE_PATH, post(create))",
-            ".route(REVOKE_PATH, delete(revoke))",
-            ".route(ACCEPT_PATH, post(accept))"
-        ]
-    );
-    assert_eq!(
-        [
-            invites::CREATE_PATH,
-            invites::REVOKE_PATH,
-            invites::ACCEPT_PATH
-        ],
-        [
-            "/api/v1/organizations/{organization_id}/invites",
-            "/api/v1/organizations/{organization_id}/invites/{id}",
-            "/api/v1/invite-acceptances",
+            ("POST", "/api/v1/organizations/{organization_id}/invites"),
+            (
+                "DELETE",
+                "/api/v1/organizations/{organization_id}/invites/{id}"
+            ),
+            ("POST", "/api/v1/invite-acceptances"),
         ]
     );
     let f = Fixture::new(|_| {}).await?;
@@ -778,7 +781,7 @@ async fn registered_invite_routes_are_versioned_and_take_no_token_path_or_query(
     for (method, path) in [
         ("POST", f.path()),
         ("DELETE", format!("{}/{}", f.path(), id.0)),
-        ("POST", invites::ACCEPT_PATH.into()),
+        ("POST", route_registry::ACCEPT_PATH.into()),
     ] {
         f.request(
             method,
@@ -788,12 +791,16 @@ async fn registered_invite_routes_are_versioned_and_take_no_token_path_or_query(
         .await?
         .assert_error(404);
     }
-    f.request("POST", &format!("{}/{}", invites::ACCEPT_PATH, token), "{}")
-        .await?
-        .assert_error(404);
     f.request(
         "POST",
-        &format!("{}?token={token}", invites::ACCEPT_PATH),
+        &format!("{}/{}", route_registry::ACCEPT_PATH, token),
+        "{}",
+    )
+    .await?
+    .assert_error(404);
+    f.request(
+        "POST",
+        &format!("{}?token={token}", route_registry::ACCEPT_PATH),
         "{}",
     )
     .await?

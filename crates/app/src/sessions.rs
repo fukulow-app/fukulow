@@ -1,10 +1,9 @@
 use axum::{
-    Json, Router,
+    Json,
     body::Bytes,
     extract::{FromRequestParts, State, rejection::BytesRejection},
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use domain::ActorId;
@@ -40,13 +39,6 @@ impl StateData {
     }
 }
 
-pub(crate) fn routes() -> Router<StateData> {
-    Router::new()
-        .route("/api/v1/sessions", post(sign_in))
-        .route("/api/v1/sessions/current", delete(sign_out))
-        .route("/api/v1/me", get(me))
-}
-
 /// Only sign-out and the future WebSocket handler may consume this lookup key.
 pub(crate) struct CurrentSession(db::TokenHash);
 
@@ -75,7 +67,7 @@ impl FromRequestParts<StateData> for Authenticated {
     }
 }
 
-async fn sign_in(
+pub(crate) async fn sign_in(
     State(state): State<StateData>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, StatusCode> {
@@ -114,7 +106,7 @@ async fn sign_in(
     Ok((jar, StatusCode::NO_CONTENT).into_response())
 }
 
-async fn sign_out(
+pub(crate) async fn sign_out(
     State(state): State<StateData>,
     authenticated: Authenticated,
 ) -> Result<Response, StatusCode> {
@@ -125,7 +117,7 @@ async fn sign_out(
     Ok((jar, StatusCode::NO_CONTENT).into_response())
 }
 
-async fn me(
+pub(crate) async fn me(
     State(state): State<StateData>,
     authenticated: Authenticated,
 ) -> Result<Json<Value>, StatusCode> {

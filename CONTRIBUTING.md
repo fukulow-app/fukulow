@@ -51,6 +51,21 @@ code, and requires every production `expect(clippy::…)` to be listed in
 where its reason is read. See
 [`docs/architecture/invariants.md`](docs/architecture/invariants.md).
 
+## Adding an HTTP route
+
+Add every route to `crates/app/src/route_registry.rs`, with its method, path,
+WebSocket upgrade flag and session requirement. State changes are derived from
+POST, PUT, PATCH, DELETE or an upgrade; they are not a separate flag. The router
+and the table-driven HTTP contract sweep both use this registry. A source test
+rejects route registration elsewhere in `crates/app/src` (inline `#[cfg(test)]`
+modules are excluded).
+
+The sweep checks Origin before credentials, missing and unknown sessions, empty
+errors without Set-Cookie, and the `/api/v1` prefix. It also checks that a route
+marked public does not require a session. The route's own tests still cover its
+body, capability, and a resource in another organization returning 404; keep
+existing order and error tests that exercise those details.
+
 ## What a pull request needs
 
 - A linked issue
