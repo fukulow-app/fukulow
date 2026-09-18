@@ -1,3 +1,22 @@
+[graph]
+# Default features alone would let an optional forbidden dependency escape the graph.
+all-features = true
+
+[bans]
+# Keep the workspace's internal edges within the diagram in
+# docs/architecture/overview.md. Cargo rejects only cycles, so domain depending on
+# protocol would otherwise build. Each entry allows only the listed direct parents;
+# an allowed edge need not be present. Dev-dependencies are checked too.
+# A new workspace member without an entry is unrestricted as a dependency: add its
+# entry here when adding the member, or forbidden edges to it will go unchecked.
+deny = [
+    { crate = "protocol", wrappers = ["app", "realtime"] },
+    { crate = "domain", wrappers = ["app", "db", "auth", "realtime"] },
+    { crate = "db", wrappers = ["app", "auth"] },
+    { crate = "auth", wrappers = ["app"] },
+    { crate = "realtime", wrappers = ["app"] },
+]
+
 [licenses]
 # MIT and Apache-2.0 cover the common licences in this dependency tree.
 # matchit's MIT AND BSD-3-Clause requires both identifiers.
