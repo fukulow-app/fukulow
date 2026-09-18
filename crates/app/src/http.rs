@@ -8,6 +8,8 @@ pub(crate) fn routes(state: crate::sessions::StateData) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(crate::sessions::routes())
+        // `layer`, not `route_layer`: only `layer` also wraps the fallback, so a request to a
+        // path that does not exist is still refused on its Origin before it is a 404.
         .layer(axum::middleware::from_fn_with_state(state.clone(), protect))
         .with_state(state)
 }

@@ -323,3 +323,35 @@ fn session_routes_reject_before_handlers() -> Result<()> {
     assert_eq!(statuses, ["401", "403", "422"]);
     Ok(())
 }
+
+#[test]
+fn unrouted_state_changing_requests_check_origin_first() -> Result<()> {
+    use std::io::{Read, Write};
+    let app = AppProcess::spawn(command())?;
+    let address = app.address()?;
+    for method in ["POST", "PUT", "PATCH", "DELETE"] {
+        for (origin, expected) in [
+            ("", "403"),
+            ("Origin: https://foreign.example.invalid\r\n", "403"),
+            ("Origin: http://localhost:8080\r\n", "404"),
+        ] {
+            let mut stream = support::connect(address)?;
+            write!(
+                stream,
+                "{method} /api/v1/does-not-exist HTTP/1.1\r\nHost: localhost\r\n{origin}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            )?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            assert_eq!(
+                response.split_whitespace().nth(1),
+                Some(expected),
+                "{method} with {origin:?}"
+            );
+            assert!(
+                response.split_once("\r\n\r\n").unwrap().1.is_empty(),
+                "{method} with {origin:?}"
+            );
+        }
+    }
+    Ok(())
+}

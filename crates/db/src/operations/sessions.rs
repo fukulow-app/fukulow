@@ -33,6 +33,24 @@ pub async fn sign_in(
         .ok_or(SignInError::InvalidCredentials)?;
     let actor = ActorId(person.actor_id);
     set_context(&mut tx, Context::Actor(actor)).await?;
+    // Leaving the service may commit between the read above and the insert below, and the
+    // insert would then fail on the deleted users row as a database error — a 500 where the
+    // contract says 401. The share lock queues behind leave_service's FOR UPDATE on the
+    // same actor, and the users row is read again under it: a departure that won the race
+    // is seen, and one that lost it waits for this session and then removes it by cascade.
+    // Taken after argon2, so a sign-in never holds up a departure for a whole verification.
+    if super::lock_actor(&mut tx, actor, actor).await? != Some(false) {
+        return Err(SignInError::InvalidCredentials);
+    }
+    let still_a_person = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM users WHERE actor_id = $1)",
+        actor.0
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if still_a_person != Some(true) {
+        return Err(SignInError::InvalidCredentials);
+    }
     sqlx::query!(
         "INSERT INTO sessions (id, actor_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)",
         Uuid::now_v7(),

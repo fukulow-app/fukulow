@@ -47,7 +47,10 @@ __Host-fukulow_session=<opaque token>; HttpOnly; Secure; SameSite=Strict; Path=/
 
 There is no `Domain` or `Expires` attribute. `__Host-` requires Secure, Path=/
 and no Domain, preventing sibling subdomains from setting the session cookie.
-The cookie persists across browser restarts. Sessions last 14 days from sign-in;
+The cookie persists across browser restarts. Its `Max-Age` is the same nominal 14 days
+as the session, and **the database's expiry is authoritative**: the browser starts
+counting when the response arrives, slightly after the expiry was set, so a cookie
+it still holds can meet an expired session and get 401. Sessions last 14 days from sign-in;
 use never extends their expiry. The database stores only a SHA-256 hash of a
 256-bit cryptographically random token. Revoked, expired, unknown and missing
 sessions all produce the same empty 401 response.

@@ -52,6 +52,53 @@ async fn credential_failures_each_verify_once_and_never_insert() -> Result {
     db.finish().await
 }
 
+/// Leaving the service commits while sign-in is verifying the password it has already read.
+/// The two transactions genuinely interleave: sign-in's verifier blocks until the departure
+/// has committed, then returns success. Without the actor lock and the second read of
+/// `users`, the session insert failed on the deleted row as `Database` — a 500 where the
+/// contract says 401.
+#[tokio::test]
+async fn a_departure_committed_during_verification_is_invalid_credentials() -> Result {
+    let db = Database::new().await?;
+    let email = "racing@example.invalid";
+    let mut tx = db.app.begin().await?;
+    let actor = db::create_person(&mut tx, email, support::PASSWORD_HASH, "Fixture person").await?;
+    tx.commit().await?;
+
+    let (verifying, verifying_seen) = std::sync::mpsc::channel::<()>();
+    let (departed, departed_seen) = std::sync::mpsc::channel::<()>();
+    let departed_seen = std::sync::Mutex::new(departed_seen);
+    let pool = db.app.clone();
+    let sign_in = tokio::spawn(async move {
+        db::sign_in(
+            &pool,
+            email,
+            move |_| {
+                let _ = verifying.send(());
+                let _ = departed_seen.lock().map(|receiver| receiver.recv());
+                true
+            },
+            &hash('c'),
+            OffsetDateTime::now_utc() + Duration::days(14),
+        )
+        .await
+    });
+    tokio::task::spawn_blocking(move || verifying_seen.recv()).await??;
+    db::leave_service(&db.app, actor).await?;
+    departed.send(())?;
+
+    let outcome = sign_in.await?;
+    assert!(
+        matches!(outcome, Err(db::SignInError::InvalidCredentials)),
+        "{outcome:?}"
+    );
+    assert!(matches!(
+        db::resolve_session(&db.app, &hash('c')).await,
+        Err(db::SessionError::NoSession)
+    ));
+    db.finish().await
+}
+
 #[tokio::test]
 async fn sessions_resolve_revoke_only_the_named_session_and_leave_with_the_person() -> Result {
     let db = Database::new().await?;
