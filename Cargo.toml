@@ -80,6 +80,14 @@ sha2 = "0.11"
 time = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Test-only: the source rules read production Rust as syntax rather than text (#51),
+# because every textual scan missed a form the grammar or rustfmt allows. syn 3 is
+# already in the dependency tree with these features, so this compiles nothing new.
+syn = { version = "3", default-features = false, features = [
+    "full",
+    "visit",
+    "parsing",
+] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -92,3 +100,17 @@ all = { level = "warn", priority = -1 }
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 too_many_lines = "warn"
+# Panics drop requests; production code must propagate failures instead of
+# leaving unwrap, expect or panic calls as warnings that can be overlooked.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+# Debug and terminal output bypass tracing and can expose secrets, so none may
+# remain in production code even when warnings are otherwise tolerated.
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+# Exceptions must explain why and expire when unused, rather than silently
+# weakening a production rule forever.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"

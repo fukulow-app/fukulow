@@ -9,11 +9,17 @@ appears here and nowhere there should not be here.
 **Each item below is a condition to flag.** Comment when the change meets it, and
 say which item. Do not comment when it does not.
 
-## Request handling
+## Production code
 
-- **Flag** `unwrap()`, `expect()` or `panic!` on a path that handles a request.
-  `expect()` at startup is not flagged when failing to start is correct and its
-  message names what is missing — **but flag it if the message includes a value**.
+- **Flag** `unwrap()`, `expect()`, `panic!`, `dbg!` or printing to stdout or stderr
+  in production code without a justified `#[expect(clippy::…, reason = "…")]`
+  at the site. Workspace clippy lints deny these outside tests in the `build` job.
+  `expect()` at startup is only justified when failing to start is correct and its
+  message names what is missing — **flag it if the message includes a value**.
+- **Flag** a new entry in `PRODUCTION_CLIPPY_EXPECTATIONS`
+  (`crates/app/tests/source_rules.rs`) whose reason is not that failing to start is
+  correct. The test makes every production exception an edit to that list; whether
+  the reason holds is the part left to judgement.
 
 ## Logs and errors
 

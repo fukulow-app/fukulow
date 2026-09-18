@@ -1,3 +1,13 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::dbg_macro,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "Clippy's test options do not cover integration-test helper functions"
+)]
+
 mod support;
 use domain::{ActorId, InviteId, OrganizationId};
 use sqlx::{PgPool, postgres::PgPoolOptions};

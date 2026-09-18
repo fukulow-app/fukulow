@@ -24,6 +24,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+syn = { workspace = true }
 # Reuse the database fixture helpers without writing SQL outside db.
 uuid = { workspace = true }
 

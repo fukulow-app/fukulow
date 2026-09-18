@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "Each test crate uses a different subset of fixtures"
+)]
 
 pub(crate) mod invites;
 pub(crate) mod sessions;

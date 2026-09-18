@@ -1,6 +1,16 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::dbg_macro,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "Clippy's test options do not cover integration-test helper functions"
+)]
+
 #[path = "../../db/tests/support/mod.rs"]
 mod database;
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Session tests do not run the production listener")]
 #[path = "../src/http.rs"]
 mod http;
 #[path = "../src/invites.rs"]
@@ -8,7 +18,7 @@ mod invites;
 mod session_support;
 #[path = "../src/sessions.rs"]
 mod sessions;
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Session tests do not register shutdown signals")]
 #[path = "../src/shutdown.rs"]
 mod shutdown;
 
