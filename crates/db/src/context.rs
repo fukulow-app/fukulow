@@ -10,6 +10,22 @@ pub struct TokenHash(String);
 pub struct InvalidTokenHash;
 
 impl TokenHash {
+    /// Encodes an already-computed digest; this type never hashes credentials.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        Self(
+            bytes
+                .iter()
+                .flat_map(|byte| {
+                    [
+                        DIGITS[(byte >> 4) as usize] as char,
+                        DIGITS[(byte & 15) as usize] as char,
+                    ]
+                })
+                .collect(),
+        )
+    }
+
     pub fn from_hex(value: String) -> Result<Self, InvalidTokenHash> {
         if value.len() == 64
             && value

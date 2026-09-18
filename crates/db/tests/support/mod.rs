@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub(crate) mod sessions;
+
 use domain::{ActorId, OrganizationId};
 use sqlx::{
     ConnectOptions, PgPool, Postgres, Row,

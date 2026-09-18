@@ -57,3 +57,6 @@ async fn lock_actor(
         .find(|row| row.id == actor.0)
         .map(|row| row.deleted_at.is_some()))
 }
+
+mod sessions;
+pub use sessions::{DUMMY_PASSWORD_HASH, Me, me, resolve_session, revoke_session, sign_in};

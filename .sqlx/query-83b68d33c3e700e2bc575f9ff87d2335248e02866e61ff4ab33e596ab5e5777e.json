@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sessions SET revoked_at = coalesce(revoked_at, now()) WHERE actor_id = $1 AND token_hash = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "83b68d33c3e700e2bc575f9ff87d2335248e02866e61ff4ab33e596ab5e5777e"
+}

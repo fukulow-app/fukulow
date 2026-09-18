@@ -1,6 +1,6 @@
 mod support;
 
-use domain::{ChannelScope, MemberStatus, OrganizationRole, TeamId, TeamRole};
+use domain::{ActorType, ChannelScope, MemberStatus, OrganizationRole, TeamId, TeamRole};
 use std::collections::BTreeSet;
 use support::{Database, Result};
 use uuid::Uuid;
@@ -9,6 +9,11 @@ use uuid::Uuid;
 async fn canonical_names_equal_database_checks() -> Result {
     let db = Database::new().await?;
     let enumerations = [
+        (
+            "actors",
+            "type",
+            ActorType::ALL.iter().map(|v| v.as_str()).collect(),
+        ),
         (
             "organization_members",
             "role",

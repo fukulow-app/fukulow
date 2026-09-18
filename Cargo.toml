@@ -41,6 +41,13 @@ tokio = { version = "1.53", features = [
 # `ws` is not enabled. Nothing serves a WebSocket until #6, and a feature turned
 # on before its first use cannot be told apart from one that is needed.
 axum = "0.8"
+# `cookie` only: parsing the Cookie header and building Set-Cookie. Signed and
+# private cookies are not enabled -- the session token is opaque and looked up by
+# its hash, so there is nothing to sign. Default features are off: they add
+# `tracing` to a crate that only formats a header (#4).
+axum-extra = { version = "0.12", default-features = false, features = [
+    "cookie",
+] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 # The binary is allowed to lose the error type at the boundary; libraries are not.
@@ -59,6 +66,17 @@ sqlx = { version = "0.9", default-features = false, features = [
     "json",
 ] }
 uuid = { version = "1.26", features = ["v7", "serde"] }
+# argon2id with the crate's defaults (m=19456, t=2, p=1 -- OWASP's minimum),
+# stored as a PHC string, so the parameters travel with the hash and can be raised
+# without a migration (#4).
+argon2 = "0.6"
+# 32 random bytes for a session token and, with #3, an invite token. Hex-encoded by
+# hand: no encoding crate for 32 bytes (#4).
+getrandom = "0.4"
+# SHA-256 of a session or invite token, the stored lookup key. A fast hash is right
+# here and argon2 is not: the token already carries 256 random bits, and the hash
+# must be deterministic to find the row by it (#4).
+sha2 = "0.11"
 time = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
