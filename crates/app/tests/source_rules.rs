@@ -454,32 +454,56 @@ impl<'ast> Visit<'ast> for RouteRegistrations {
 #[test]
 fn routes_are_registered_only_in_the_registry() -> Result<(), Box<dyn Error>> {
     let mut offenders = Vec::new();
+    let mut registry = None;
     for (path, text) in production_files()? {
-        if !path.starts_with("crates/app/src/") || path == "crates/app/src/route_registry.rs" {
+        if !path.starts_with("crates/app/src/") {
             continue;
         }
         let mut calls = RouteRegistrations::default();
         calls.visit_file(&syn::parse_file(&text)?);
-        offenders.extend(calls.0.into_iter().map(|call| format!("{path}: {call}")));
+        if path == "crates/app/src/route_registry.rs" {
+            registry = Some(calls.0);
+        } else {
+            offenders.extend(calls.0.into_iter().map(|call| format!("{path}: {call}")));
+        }
     }
     assert!(
         offenders.is_empty(),
         "route registration outside route_registry.rs: {offenders:?}"
+    );
+    // The registry itself registers exactly once: the fold over ROUTES. A second call
+    // there would add a route the table does not list.
+    assert_eq!(
+        registry,
+        Some(vec![".route(…)".to_owned()]),
+        "route_registry.rs must register routes only by folding ROUTES"
     );
     Ok(())
 }
 
 #[test]
 fn route_registrations_are_found_in_every_calling_form() -> Result<(), Box<dyn Error>> {
-    for source in [
-        "fn f(r: Router) -> Router { r.route(\"/x\", get(h)) }",
-        "fn f(r: Router) -> Router { r\n    .route_service(\"/x\", s) }",
-        "fn f(r: Router) -> Router { Router::route(r, \"/x\", get(h)) }",
-        "fn f(r: Router) -> Router { axum::Router::merge(r, other()) }",
+    // Written out here rather than read from ROUTE_REGISTRATIONS, so dropping a name from
+    // that list fails this test instead of silently shrinking what it checks.
+    for name in [
+        "route",
+        "route_service",
+        "nest",
+        "nest_service",
+        "merge",
+        "fallback",
+        "fallback_service",
     ] {
-        let mut calls = RouteRegistrations::default();
-        calls.visit_file(&syn::parse_file(source)?);
-        assert_eq!(calls.0.len(), 1, "{source:?}");
+        for source in [
+            format!("fn f(r: Router) -> Router {{ r.{name}(x) }}"),
+            format!("fn f(r: Router) -> Router {{ r\n    .{name}(x) }}"),
+            format!("fn f(r: Router) -> Router {{ Router::{name}(r, x) }}"),
+            format!("fn f(r: Router) -> Router {{ axum::Router::{name}(r, x) }}"),
+        ] {
+            let mut calls = RouteRegistrations::default();
+            calls.visit_file(&syn::parse_file(&source)?);
+            assert_eq!(calls.0.len(), 1, "{source:?}");
+        }
     }
     let mut calls = RouteRegistrations::default();
     calls.visit_file(&syn::parse_file(
