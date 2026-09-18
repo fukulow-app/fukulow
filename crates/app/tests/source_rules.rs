@@ -53,6 +53,44 @@ fn production_files() -> Result<Vec<(String, String)>, Box<dyn Error>> {
     Ok(files)
 }
 
+/// Every attribute in `text`, as `(inner, body)`, with comments and all whitespace removed.
+/// Matching the written form instead misses what rustfmt and the grammar allow: a long
+/// `#[expect(...)]` is split over lines, `#![` may be followed by whitespace, and
+/// `#![cfg_attr(cond, allow(...))]` is an inner lint attribute too.
+fn attributes(text: &str) -> Vec<(bool, String)> {
+    let code: String = text
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or_default())
+        .flat_map(str::chars)
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let mut found = Vec::new();
+    let mut rest = code.as_str();
+    while let Some(start) = rest.find('#') {
+        let after = &rest[start + 1..];
+        let (inner, body) = match after.strip_prefix('!') {
+            Some(body) => (true, body),
+            None => (false, after),
+        };
+        if let Some(body) = body.strip_prefix('[') {
+            let mut depth = 1;
+            let end = body.char_indices().find_map(|(index, c)| {
+                match c {
+                    '[' => depth += 1,
+                    ']' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(index)
+            });
+            if let Some(end) = end {
+                found.push((inner, body[..end].to_owned()));
+            }
+        }
+        rest = after;
+    }
+    found
+}
+
 #[test]
 fn production_code_has_no_inner_lint_attribute() -> Result<(), Box<dyn Error>> {
     let files = production_files()?;
@@ -64,11 +102,12 @@ fn production_code_has_no_inner_lint_attribute() -> Result<(), Box<dyn Error>> {
     let offenders: Vec<String> = files
         .iter()
         .flat_map(|(path, text)| {
-            text.lines().enumerate().filter_map(move |(index, line)| {
-                let line = line.trim_start();
-                (line.starts_with("#![allow(") || line.starts_with("#![expect("))
-                    .then(|| format!("{path}:{}", index + 1))
-            })
+            attributes(text)
+                .into_iter()
+                .filter(|(inner, body)| {
+                    *inner && (body.contains("allow(") || body.contains("expect("))
+                })
+                .map(move |(_, body)| format!("{path}: #![{body}]"))
         })
         .collect();
     assert!(
@@ -82,12 +121,17 @@ fn production_code_has_no_inner_lint_attribute() -> Result<(), Box<dyn Error>> {
 fn production_clippy_expectations_are_all_listed() -> Result<(), Box<dyn Error>> {
     let mut found: Vec<(String, String)> = Vec::new();
     for (path, text) in production_files()? {
-        for part in text.split("expect(clippy::").skip(1) {
-            let lint: String = part
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
-            found.push((path.clone(), lint));
+        for (_, body) in attributes(&text) {
+            let Some(expectation) = body.split("expect(").nth(1) else {
+                continue;
+            };
+            for part in expectation.split("clippy::").skip(1) {
+                let lint: String = part
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                found.push((path.clone(), lint));
+            }
         }
     }
     found.sort();
@@ -101,4 +145,39 @@ fn production_clippy_expectations_are_all_listed() -> Result<(), Box<dyn Error>>
         "production `expect(clippy::…)` sites must equal PRODUCTION_CLIPPY_EXPECTATIONS"
     );
     Ok(())
+}
+
+#[test]
+fn the_attribute_scanner_sees_every_written_form() {
+    let forms = [
+        (
+            "#![allow(clippy::unwrap_used)]",
+            true,
+            "allow(clippy::unwrap_used)",
+        ),
+        (
+            "#!  [\n  allow(\n clippy::panic )]",
+            true,
+            "allow(clippy::panic)",
+        ),
+        (
+            "#![cfg_attr(not(test), allow(clippy::panic))]",
+            true,
+            "cfg_attr(not(test),allow(clippy::panic))",
+        ),
+        (
+            "#[expect(\n    clippy::unwrap_used,\n    reason = \"x\"\n)]",
+            false,
+            "expect(clippy::unwrap_used,reason=\"x\")",
+        ),
+        ("// #![allow(clippy::panic)] in a comment", false, ""),
+    ];
+    for (source, inner, body) in forms {
+        let found = attributes(source);
+        if body.is_empty() {
+            assert!(found.is_empty(), "{source:?} -> {found:?}");
+        } else {
+            assert_eq!(found, [(inner, body.to_owned())], "{source:?}");
+        }
+    }
 }
