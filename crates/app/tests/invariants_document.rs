@@ -17,7 +17,14 @@ fn cells(line: &str) -> Option<Vec<&str>> {
     let mut cells = Vec::new();
     let mut start = 0;
     for (index, character) in line.char_indices() {
-        if character == '|' && !line[..index].ends_with('\\') {
+        // A pipe is escaped by an odd run of backslashes before it: `\|` escapes it,
+        // `\\|` is an escaped backslash followed by a real delimiter.
+        let backslashes = line[..index]
+            .chars()
+            .rev()
+            .take_while(|&c| c == '\\')
+            .count();
+        if character == '|' && backslashes % 2 == 0 {
             cells.push(line[start..index].trim());
             start = index + 1;
         }
@@ -151,6 +158,12 @@ fn escaped_pipes_do_not_shift_the_enforcement_column() {
     }
     let errors = review_debt_errors(&table(r"| Named \| rule | checked in review | #58 |"));
     assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains("without an issue"), "{errors:?}");
+    // `\\|` is an escaped backslash and then a real delimiter, so this row has three
+    // cells and its Enforced by is "Review" with no issue. Treating the pipe as escaped
+    // would merge two cells and report the width instead.
+    let errors = review_debt_errors(&table(r"| Named \\| Review | in place |"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].contains("without an issue"), "{errors:?}");
 }
 
