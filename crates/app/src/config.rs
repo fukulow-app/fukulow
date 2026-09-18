@@ -52,6 +52,21 @@ pub(crate) fn validate_public_origin(value: &str) -> Result<()> {
     if !suffix.is_empty() && (!suffix.starts_with(':') || suffix[1..].parse::<u16>().is_err()) {
         return Err(invalid());
     }
+    // A browser sends the serialized origin: lower-case scheme and host, and no port when
+    // it is the scheme's default. The Origin check compares bytes, so a configuration
+    // that differs only in case or in an explicit :443 would start and then refuse every
+    // same-origin request that changes state. Refusing here says which form to write,
+    // rather than accepting one string and comparing another.
+    let default_port = match scheme {
+        "https" => ":443",
+        "http" => ":80",
+        _ => "",
+    };
+    if value != value.to_ascii_lowercase() || (!default_port.is_empty() && suffix == default_port) {
+        return Err(anyhow!(
+            "FUKULOW_PUBLIC_ORIGIN must be written as a browser sends it: lower-case scheme and host, and no port when it is the scheme's default"
+        ));
+    }
     if scheme != "https"
         && !(scheme == "http" && matches!(host, "localhost" | "127.0.0.1" | "[::1]"))
     {

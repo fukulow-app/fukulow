@@ -250,6 +250,12 @@ fn public_origin_is_required_and_invalid_values_are_not_disclosed() -> Result<()
         "https://chat.example.invalid:65536",
         "https://",
         "not-an-origin",
+        // Non-canonical forms a browser never sends: the Origin check compares bytes.
+        "https://Chat.Example.Invalid",
+        "HTTPS://chat.example.invalid",
+        "https://chat.example.invalid:443",
+        "http://LOCALHOST:8080",
+        "http://localhost:80",
     ] {
         let mut command = command();
         command.env("FUKULOW_PUBLIC_ORIGIN", rejected);
@@ -257,7 +263,11 @@ fn public_origin_is_required_and_invalid_values_are_not_disclosed() -> Result<()
         assert!(!app.wait_for_exit()?.success());
         let logs = app.remaining_logs();
         assert!(logs.contains("FUKULOW_PUBLIC_ORIGIN"));
-        assert!(logs.contains("must contain") || logs.contains("requires HTTPS"));
+        assert!(
+            logs.contains("must contain")
+                || logs.contains("requires HTTPS")
+                || logs.contains("must be written as a browser sends it")
+        );
         assert!(!logs.contains(rejected));
     }
     Ok(())

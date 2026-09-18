@@ -12,6 +12,12 @@ and optional port, such as `https://chat.example.com:8443`. Credentials, paths,
 a trailing slash, queries and fragments are refused at startup without echoing
 the rejected value.
 
+**It must be written the way a browser sends it**: a lower-case scheme and host,
+and no port when it is the scheme's default. `https://Chat.Example.com` and
+`https://chat.example.com:443` are refused at startup. The Origin check compares
+bytes, so accepting them would start a server that refuses every same-origin
+request that changes state.
+
 HTTPS is required because browsers refuse the Secure session cookie on insecure
 origins. Development permits `http://localhost`, `http://127.0.0.1` and
 `http://[::1]`, with any port. Chromium was measured to accept the cookie on

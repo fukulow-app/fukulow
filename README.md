@@ -55,7 +55,9 @@ content-type: application/json
 
 `FUKULOW_PUBLIC_ORIGIN` is required, with no default. Set it to the browser's
 origin, such as `https://chat.example.com`, including a port when needed. Paths,
-trailing slashes, queries, fragments and credentials are refused. Startup requires
+trailing slashes, queries, fragments and credentials are refused, and so is any
+form a browser does not send: an upper-case scheme or host, or the scheme's
+default port written out. Startup requires
 HTTPS because the `Secure` session cookie cannot work on insecure LAN origins.
 Development may use `http://localhost`, `http://127.0.0.1` or `http://[::1]`, with
 any port. Chromium was measured to accept the cookie on loopback HTTP; Firefox
