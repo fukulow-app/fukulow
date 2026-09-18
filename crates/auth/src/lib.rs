@@ -91,6 +91,25 @@ pub fn hash_session_token(token: &str) -> db::TokenHash {
     hash_token(token)
 }
 
+/// An invite credential has no diagnostic representation, like a session token.
+pub struct InviteToken(String);
+
+impl InviteToken {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+pub fn new_invite_token() -> Result<(InviteToken, db::TokenHash), TokenError> {
+    let token = random_token(getrandom::fill)?;
+    let hash = hash_invite_token(&token);
+    Ok((InviteToken(token), hash))
+}
+
+pub fn hash_invite_token(token: &str) -> db::TokenHash {
+    hash_token(token)
+}
+
 pub(crate) fn random_token(
     fill: impl FnOnce(&mut [u8]) -> Result<(), getrandom::Error>,
 ) -> Result<String, TokenError> {

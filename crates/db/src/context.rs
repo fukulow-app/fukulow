@@ -43,8 +43,6 @@ impl TokenHash {
     }
 }
 
-// Credential contexts are consumed by the invite and sign-in operations as they land.
-#[allow(dead_code)]
 pub(crate) enum Context<'a> {
     Actor(ActorId),
     SessionToken(TokenHash),

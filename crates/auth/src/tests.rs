@@ -101,3 +101,33 @@ fn tokens_use_all_32_random_bytes_and_sha256_lowercase_hex() {
     assert_eq!(hash.as_str(), hash_session_token(&first).as_str());
     assert_ne!(first, hash.as_str());
 }
+
+#[test]
+fn invite_tokens_reuse_the_random_and_hash_steps_without_a_diagnostic_representation() {
+    let (first, hash) = new_invite_token().unwrap();
+    let (second, _) = new_invite_token().unwrap();
+    assert_eq!(first.as_str().len(), 64);
+    assert!(
+        first
+            .as_str()
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    );
+    assert_ne!(first.as_str(), second.as_str());
+    assert_eq!(hash.as_str(), hash_token(first.as_str()).as_str());
+    assert_eq!(
+        hash_invite_token("abc").as_str(),
+        hash_token("abc").as_str()
+    );
+    let source = include_str!("lib.rs");
+    let function = source
+        .split("pub fn new_invite_token()")
+        .nth(1)
+        .unwrap()
+        .split("pub fn hash_invite_token")
+        .next()
+        .unwrap();
+    assert!(function.contains("random_token(getrandom::fill)?"));
+    assert!(!source.contains("impl std::fmt::Debug for InviteToken"));
+    assert!(!source.contains("impl std::fmt::Display for InviteToken"));
+}

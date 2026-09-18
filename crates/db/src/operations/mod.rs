@@ -1,3 +1,4 @@
+mod authorization;
 mod channels;
 mod messages;
 pub use channels::{add_channel_member, create_channel};
@@ -17,17 +18,34 @@ pub use teams::{add_team_member, change_team_member_role, create_team, remove_te
 use domain::{ActorId, OrganizationId};
 use sqlx::PgConnection;
 
+enum OrganizationLock {
+    Update,
+    Share,
+}
+
 async fn lock_organization(
     conn: &mut PgConnection,
     organization: OrganizationId,
+    lock: OrganizationLock,
 ) -> Result<bool, sqlx::Error> {
-    Ok(sqlx::query!(
-        "SELECT id FROM organizations WHERE id = $1 FOR UPDATE",
-        organization.0
-    )
-    .fetch_optional(conn)
-    .await?
-    .is_some())
+    match lock {
+        OrganizationLock::Update => Ok(sqlx::query!(
+            "SELECT id FROM organizations WHERE id = $1 FOR UPDATE",
+            organization.0
+        )
+        .fetch_optional(conn)
+        .await?
+        .is_some()),
+        // Acceptance holds the invite first; its membership FK must not wait on
+        // revocation's organization lock. SHARE still conflicts with role changes.
+        OrganizationLock::Share => Ok(sqlx::query!(
+            "SELECT id FROM organizations WHERE id = $1 FOR SHARE",
+            organization.0
+        )
+        .fetch_optional(conn)
+        .await?
+        .is_some()),
+    }
 }
 
 async fn active_owners(
@@ -60,3 +78,6 @@ async fn lock_actor(
 
 mod sessions;
 pub use sessions::{DUMMY_PASSWORD_HASH, Me, me, resolve_session, revoke_session, sign_in};
+
+mod invites;
+pub use invites::{accept_invite, create_invite, invite_is_usable, revoke_invite};

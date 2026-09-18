@@ -69,8 +69,30 @@ a notice does not decide who receives it.
 if member.role == Role::Admin { ... }
 
 // Yes
-if can(&actor, Capability::InviteMember) { ... }
+match authorize(conn, actor, organization, Capability::InviteMember).await? { ... }
 ```
+
+`Capability::InviteMember` is held by owners and admins. It authorizes both creating
+and revoking organization invites; members do not hold it. State-changing operations
+must decide their capability inside the transaction that writes, from an active
+membership row locked `FOR SHARE`. The crate-private `db` helper
+`authorize(conn, actor, organization, capability)` asks `OrganizationRole::holds`
+in `domain` and returns `Allowed`, `Forbidden`, or `NotAMember`. Invite creation
+and revocation use it; routes map the operation's refusal to 403 or 404 and do
+not run a separate authorization transaction. A suspended owner is not an active
+member and receives 404. An active member without the capability receives 403.
+
+The lock order is **actor → organization → membership**: call `lock_actor` and
+`lock_organization` before `authorize`. A missing or invisible organization also
+returns `NotAMember`. Taking the membership first can deadlock with a demotion:
+the demotion holds the organization `FOR UPDATE` while waiting for membership,
+and an invite INSERT needs `KEY SHARE` on that organization for its foreign key.
+Invite operations take the organization `FOR SHARE`: this conflicts with role
+changes' `FOR UPDATE`, but allows invite acceptance's membership foreign key to
+take `KEY SHARE`. Otherwise acceptance holding the invite and revocation holding
+the organization can deadlock. Other operations keep their organization
+`FOR UPDATE` locks. Revocation authorizes before looking up the invite, including
+before reporting an invalid invite identifier.
 
 The mapping from role to capability lives in one place in `domain`, in code, not
 in the database. **When roles change shape — several per person, new ones per
@@ -139,8 +161,11 @@ service is the one service-wide exception**: it reads the acting actor's own
 organization memberships and channel listings by `actor_id` alone, because the
 organizations it belongs to are what that read discovers. Row security admits only the
 actor's own rows there, and every write that follows is scoped by the `organization_id`
-each row names. PostgreSQL row level security sits underneath as the wall that holds
-when something reaches the tables another way.
+each row names. **Invite acceptance is the other exception**: the pre-check and
+conditional use look up a globally unique token hash before an organization is known.
+`fukulow.invite_token_hash` admits that one row; every following write is scoped by
+its returned organization. PostgreSQL row level security sits underneath as the wall
+that holds when something reaches the tables another way.
 
 - The application sets the acting actor's id, `fukulow.actor_id`, or the credential
   the request presented: `fukulow.session_token_hash`, `fukulow.sign_in_email`, or
@@ -151,8 +176,11 @@ when something reaches the tables another way.
   self and every actor with a membership, of any status, in the acting actor's active organizations; `users` admits self or the one ASCII-case-insensitive
   sign-in email match; `sessions` admits self or the one token-hash match.
   `invites` also admits the one presented invite hash. Invite acceptance creates
-  an actor and sets its id before inserting the user. No policy admits a membership
-  through an invite yet; it arrives with acceptance, tied to the invite's use
+  an actor and sets its id before inserting the user. The invite insert policy admits
+  only an active member for that actor in the invite's
+  organization, after a successful conditional increment in the same transaction.
+  It checks the invite's kind, expiry, revocation and `xmin`; a trigger prevents
+  no-op updates and fabricated initial counts from supplying that proof
 - Inactive actors can reach their own organization, team and channel membership
   rows for departure, without seeing anyone else's rows. Audits and listing
   removals precede all status transitions. An outside actor leaving the service
@@ -161,7 +189,8 @@ when something reaches the tables another way.
   An inactive actor's own organization membership can only become `left`, with its
   display name cleared and its role unchanged
 - **Passing row security is not permission.** Policies decide visibility;
-  `can(actor, Capability)` decides what may be done before an operation runs
+  `authorize(conn, actor, organization, Capability)` decides what may be done
+  inside the writing transaction
 - The application role cannot bypass row security: it does not own the tables,
   is not a superuser, and has no `BYPASSRLS`. Every application table, including
   globals, has ENABLE and FORCE. Exactly two hardened definer functions read
@@ -183,7 +212,7 @@ The enforcement details and how each is tested are in
 
 ## Not yet decided
 
-- Which capabilities exist, and which role holds each
+- Further capabilities beyond `InviteMember`, and which roles hold them
 - Who may post to an organization-scoped channel — this belongs to the channel
   (`everyone` or administrators only), not to a job title, and is not built yet
 - How connections between organizations are requested and approved

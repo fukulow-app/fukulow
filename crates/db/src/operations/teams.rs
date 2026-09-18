@@ -16,7 +16,7 @@ pub async fn create_team(
 ) -> Result<TeamId, CreateTeamError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(CreateTeamError::NotFound);
     }
     let team = TeamId(Uuid::now_v7());
@@ -45,7 +45,7 @@ pub async fn add_team_member(
 ) -> Result<(), AddTeamMemberError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     let departed = lock_actor(&mut tx, actor_id, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(AddTeamMemberError::NotFound);
     }
     let team = sqlx::query!(
@@ -95,7 +95,7 @@ pub async fn change_team_member_role(
 ) -> Result<(), ChangeTeamMemberRoleError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(ChangeTeamMemberRoleError::NotFound);
     }
     let row = sqlx::query!("SELECT role FROM team_members WHERE organization_id = $1 AND team_id = $2 AND actor_id = $3", organization_id.0, team_id.0, actor_id.0)
@@ -124,7 +124,7 @@ pub async fn remove_team_member(
 ) -> Result<(), RemoveTeamMemberError> {
     let mut tx = begin(pool, Context::Actor(performed_by)).await?;
     lock_actor(&mut tx, performed_by, performed_by).await?;
-    if !lock_organization(&mut tx, organization_id).await? {
+    if !lock_organization(&mut tx, organization_id, super::OrganizationLock::Update).await? {
         return Err(RemoveTeamMemberError::NotFound);
     }
     let result = sqlx::query!(
