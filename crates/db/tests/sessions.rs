@@ -12,6 +12,11 @@ fn hash(byte: char) -> db::TokenHash {
     db::TokenHash::from_hex(byte.to_string().repeat(64)).unwrap()
 }
 
+/// Hands `sign_in` a fixed hash where the application's RNG would make a token.
+fn issue(hash: db::TokenHash) -> impl FnOnce() -> Option<((), db::TokenHash)> + Send {
+    move || Some(((), hash))
+}
+
 #[tokio::test]
 async fn credential_failures_each_verify_once_and_never_insert() -> Result {
     let db = Database::new().await?;
@@ -22,8 +27,6 @@ async fn credential_failures_each_verify_once_and_never_insert() -> Result {
     for (address, result, expected) in [
         (email, false, support::PASSWORD_HASH),
         ("unknown@example.invalid", true, db::DUMMY_PASSWORD_HASH),
-        // PostgreSQL text cannot hold U+0000: an unknown address, not a database error.
-        ("signin\u{0}@example.invalid", true, db::DUMMY_PASSWORD_HASH),
     ] {
         let calls = Arc::new(AtomicUsize::new(0));
         let count = calls.clone();
@@ -35,7 +38,7 @@ async fn credential_failures_each_verify_once_and_never_insert() -> Result {
                 assert_eq!(phc, expected);
                 result
             },
-            &hash('a'),
+            issue(hash('a')),
             OffsetDateTime::now_utc() + Duration::days(14),
         )
         .await;
@@ -80,7 +83,7 @@ async fn a_departure_committed_during_verification_is_invalid_credentials() -> R
                 let _ = departed_seen.lock().map(|receiver| receiver.recv());
                 true
             },
-            &hash('c'),
+            issue(hash('c')),
             OffsetDateTime::now_utc() + Duration::days(14),
         )
         .await
@@ -116,7 +119,15 @@ async fn sessions_resolve_revoke_only_the_named_session_and_leave_with_the_perso
     let expiry = OffsetDateTime::now_utc() + Duration::days(14);
     for token in [hash('a'), hash('b')] {
         assert_eq!(
-            db::sign_in(&db.app, "ascii@EXAMPLE.invalid", |_| true, &token, expiry).await?,
+            db::sign_in(
+                &db.app,
+                "ascii@EXAMPLE.invalid",
+                |_| true,
+                issue(token.clone()),
+                expiry
+            )
+            .await?
+            .0,
             actor
         );
         assert_eq!(db::resolve_session(&db.app, &token).await?, actor);
@@ -156,7 +167,7 @@ async fn sessions_resolve_revoke_only_the_named_session_and_leave_with_the_perso
             &db.app,
             "ASCII@example.invalid",
             |_| true,
-            &hash('c'),
+            issue(hash('c')),
             expiry
         )
         .await,
@@ -212,7 +223,7 @@ async fn absolute_expiry_is_not_extended_by_resolution() -> Result {
         &db.app,
         "clock@example.invalid",
         |_| true,
-        &hash('a'),
+        issue(hash('a')),
         expiry,
     )
     .await?;
@@ -269,11 +280,11 @@ async fn signed_in_person(db: &Database) -> Result<ActorId> {
         &db.app,
         "visibility@example.invalid",
         |phc| phc == db::DUMMY_PASSWORD_HASH,
-        &hash('a'),
+        issue(hash('a')),
         OffsetDateTime::now_utc() + Duration::days(14),
     )
     .await?;
-    assert_eq!(actor_from_session, actor);
+    assert_eq!(actor_from_session.0, actor);
     Ok(actor)
 }
 
@@ -350,10 +361,11 @@ async fn signed_in_suspended_member_sees_only_own_memberships() -> Result {
             &db.app,
             "visibility@example.invalid",
             |_| true,
-            &hash('b'),
+            issue(hash('b')),
             OffsetDateTime::now_utc() + Duration::days(14)
         )
-        .await?,
+        .await?
+        .0,
         actor
     );
     assert_eq!(db::resolve_session(&db.app, &hash('b')).await?, actor);

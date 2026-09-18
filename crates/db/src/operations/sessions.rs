@@ -10,21 +10,16 @@ use uuid::Uuid;
 // even when no user exists, and its result is discarded in that case. gitleaks:allow
 pub const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$ZnVrdWxvdy1kdW1teS1zYWx0$OA3QfvZgfeDS0Ga5mZRi0S3nzxuaKJZEOshVa7Yv68s";
 
-pub async fn sign_in(
+/// `new_token` is called only once the credential is accepted, so a failing RNG cannot
+/// turn a wrong password into a 500: every credential failure is decided first, and a
+/// failed attempt spends no randomness. It returns the token and its hash, or `None`.
+pub async fn sign_in<T: Send>(
     pool: &PgPool,
     email: &str,
     verify: impl Fn(&str) -> bool + Send + 'static,
-    token_hash: &TokenHash,
+    new_token: impl FnOnce() -> Option<(T, TokenHash)> + Send,
     expires_at: OffsetDateTime,
-) -> Result<ActorId, SignInError> {
-    // PostgreSQL text cannot hold U+0000, and #3 and #30 refuse it when an address is
-    // stored, so such an address names no account. Setting it as the sign-in context
-    // would be a database error — a 500 where every credential failure is 401 — so it is
-    // answered as an unknown address, dummy verification included.
-    if email.contains('\0') {
-        let _ = tokio::task::spawn_blocking(move || verify(DUMMY_PASSWORD_HASH)).await;
-        return Err(SignInError::InvalidCredentials);
-    }
+) -> Result<(ActorId, T), SignInError> {
     let mut tx = begin(pool, Context::SignInEmail(email)).await?;
     let person = sqlx::query!(r#"SELECT actor_id, password_hash FROM users WHERE lower(email COLLATE "C") = lower($1 COLLATE "C")"#, email)
         .fetch_optional(&mut *tx).await?;
@@ -59,6 +54,7 @@ pub async fn sign_in(
     if still_a_person != Some(true) {
         return Err(SignInError::InvalidCredentials);
     }
+    let (token, token_hash) = new_token().ok_or(SignInError::TokenUnavailable)?;
     sqlx::query!(
         "INSERT INTO sessions (id, actor_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)",
         Uuid::now_v7(),
@@ -69,7 +65,7 @@ pub async fn sign_in(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(actor)
+    Ok((actor, token))
 }
 
 pub async fn resolve_session(

@@ -82,24 +82,29 @@ async fn sign_in(
     let email = object
         .get("email")
         .and_then(Value::as_str)
+        // PostgreSQL text cannot hold U+0000, so such an address cannot be looked up; it
+        // is refused here as a malformed body rather than reaching the database as a 500.
+        .filter(|email| !email.contains('\0'))
         .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
     let password = object
         .get("password")
         .and_then(Value::as_str)
         .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?
         .to_owned();
-    let (token, hash) = (state.new_token)().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    db::sign_in(
+    let new_token = state.new_token;
+    let (_, token) = db::sign_in(
         &state.pool,
         email,
         move |phc| auth::verify_password(&password, phc),
-        &hash,
+        move || new_token().ok(),
         (state.now)() + SESSION_LIFETIME,
     )
     .await
     .map_err(|error| match error {
         db::SignInError::InvalidCredentials => StatusCode::UNAUTHORIZED,
-        db::SignInError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        db::SignInError::TokenUnavailable | db::SignInError::Database(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     })?;
     let jar = CookieJar::new().add(cookie(token.as_str().to_owned(), SESSION_LIFETIME));
     Ok((jar, StatusCode::NO_CONTENT).into_response())

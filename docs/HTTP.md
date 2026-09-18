@@ -72,10 +72,13 @@ credentials are a separate credential type resolving to the same actor.
 | `GET /api/v1/me` | Session cookie | 200 and identity JSON | 401, 500 |
 
 Sign-in parses JSON regardless of Content-Type. A non-object, malformed JSON,
-or a missing or non-string email or password returns 422. Email matches ignoring
-ASCII case. Wrong passwords and unknown email addresses are indistinguishable;
-unknown addresses still incur one password verification. Sign-in stores no
-password hash. A person who has left cannot sign in and has no sessions.
+a missing or non-string email or password, or an email containing U+0000 returns
+422. Email matches ignoring ASCII case. Wrong passwords and unknown email addresses
+are indistinguishable; unknown addresses still incur one password verification.
+**Every credential failure is 401, decided before the session token is made**: a
+token is generated only once the credential is accepted, so a failing random number
+generator answers 500 only for a correct credential. Sign-in stores no password
+hash. A person who has left cannot sign in and has no sessions.
 
 `GET /api/v1/me` returns:
 

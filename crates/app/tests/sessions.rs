@@ -193,6 +193,9 @@ async fn invalid_bodies_and_credentials_have_empty_indistinguishable_responses()
         r#"{"password":"wrong"}"#,
         r#"{"email":0,"password":"wrong"}"#,
         r#"{"email":"fixture@example.invalid","password":null}"#,
+        // U+0000 cannot reach PostgreSQL text: a malformed body, not a database error.
+        r#"{"email":"fixture\u0000@example.invalid","password":"wrong"}"#,
+        r#"{"email":"\u0000","password":"wrong"}"#,
     ] {
         for content_type in ["application/json", "text/plain", ""] {
             let header = if content_type.is_empty() {
@@ -330,6 +333,45 @@ fn nonhuman_json_omits_user_and_preserves_each_canonical_type() {
 }
 
 static GENERATED_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+static TOKEN_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn failing_token() -> std::result::Result<(auth::SessionToken, db::TokenHash), auth::TokenError> {
+    TOKEN_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Err(auth::TokenError)
+}
+
+/// The token is made only once the credential is accepted, so a failing RNG cannot turn a
+/// credential failure into a 500, and a failed attempt asks the RNG for nothing.
+#[tokio::test]
+async fn credential_failures_are_401_even_when_the_rng_fails_and_spend_no_token() -> Result {
+    use std::sync::atomic::Ordering::SeqCst;
+    let db = Database::new().await?;
+    let actor = person(&db).await?;
+    let mut state = sessions::StateData::new(db.app.clone(), ORIGIN.into());
+    state.new_token = failing_token;
+    let server = Server::new(state).await?;
+    TOKEN_CALLS.store(0, SeqCst);
+    for (email, password) in [(EMAIL, "wrong"), ("unknown@example.invalid", PASSWORD)] {
+        server
+            .request(
+                "POST",
+                "/api/v1/sessions",
+                Some(ORIGIN),
+                None,
+                &json!({"email":email,"password":password}).to_string(),
+            )
+            .await?
+            .assert_error(401);
+    }
+    assert_eq!(TOKEN_CALLS.load(SeqCst), 0);
+    // With the credential accepted, the RNG is asked once and its failure is the 500.
+    server.sign_in().await?.assert_error(500);
+    assert_eq!(TOKEN_CALLS.load(SeqCst), 1);
+    assert_eq!(database::sessions::session_count(&db, actor).await?, 0);
+    drop(server);
+    db.finish().await
+}
 
 fn record_token() -> std::result::Result<(auth::SessionToken, db::TokenHash), auth::TokenError> {
     let (token, hash) = auth::new_session_token()?;
