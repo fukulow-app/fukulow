@@ -14,11 +14,39 @@ pub(crate) const PASSWORD: &str = "fixture-password";
 pub(crate) const DUMMY_PASSWORD: &str = "fixture-dummy-password";
 
 pub(crate) async fn person(db: &database::Database) -> Result<domain::ActorId> {
+    for value in [EMAIL, PASSWORD, "Fixture person"] {
+        register_secret(value);
+    }
     let hash = tokio::task::spawn_blocking(|| auth::hash_password(PASSWORD)).await??;
     let mut tx = db.app.begin().await?;
     let actor = db::create_person(&mut tx, EMAIL, &hash, "Fixture person").await?;
     tx.commit().await?;
     Ok(actor)
+}
+
+pub(crate) async fn database() -> Result<database::Database> {
+    database::Database::with_secret_checks(register_secret, scan_logs).await
+}
+
+pub(crate) fn state(pool: sqlx::PgPool) -> sessions::StateData {
+    let mut state = sessions::StateData::new(pool, ORIGIN.into());
+    state.new_token = new_session_token;
+    state.new_invite_token = new_invite_token;
+    state
+}
+
+pub(crate) fn new_session_token()
+-> std::result::Result<(auth::SessionToken, db::TokenHash), auth::TokenError> {
+    let pair = auth::new_session_token()?;
+    register_secret(pair.0.as_str());
+    Ok(pair)
+}
+
+pub(crate) fn new_invite_token()
+-> std::result::Result<(auth::InviteToken, db::TokenHash), auth::TokenError> {
+    let pair = auth::new_invite_token()?;
+    register_secret(pair.0.as_str());
+    Ok(pair)
 }
 
 pub(crate) struct Server {
@@ -63,12 +91,14 @@ impl Server {
         let cookie = token
             .map(|token| format!("Cookie: {}={token}\r\n", sessions::COOKIE_NAME))
             .unwrap_or_default();
-        self.raw(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\n{origin}{cookie}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())).await
+        let response = self.raw(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\n{origin}{cookie}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())).await;
+        scan_logs();
+        response
     }
 
     pub(crate) async fn raw(&self, request: String) -> Result<Response> {
         let address = self.address;
-        tokio::task::spawn_blocking(move || {
+        let response = tokio::task::spawn_blocking(move || {
             let mut stream = std::net::TcpStream::connect(address)?;
             stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
             stream.write_all(request.as_bytes())?;
@@ -94,7 +124,9 @@ impl Server {
                 body: body.to_owned(),
             })
         })
-        .await?
+        .await;
+        scan_logs();
+        response?
     }
 }
 
@@ -162,22 +194,45 @@ pub(crate) fn distinctive(value: &str) -> bool {
     value.len() >= 16 || !value.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+fn check_distinctive(value: &str) {
+    assert!(
+        distinctive(value),
+        "a short hex-only value can appear in unrelated log text; it is not a checkable secret"
+    );
+}
+
+fn secrets() -> &'static Mutex<std::collections::BTreeSet<String>> {
+    static SECRETS: OnceLock<Mutex<std::collections::BTreeSet<String>>> = OnceLock::new();
+    SECRETS.get_or_init(Default::default)
+}
+
+pub(crate) fn register_secret(value: &str) {
+    check_distinctive(value);
+    logs();
+    let escaped = format!("{value:?}");
+    let mut secrets = secrets().lock().unwrap();
+    secrets.insert(value.to_lowercase());
+    secrets.insert(escaped[1..escaped.len() - 1].to_lowercase());
+}
+
+pub(crate) fn scan_logs() {
+    // Release both locks before asserting: a caught failure must not poison later scans.
+    let secrets = secrets().lock().unwrap().clone();
+    let bytes = logs().lock().unwrap().clone();
+    let logs = String::from_utf8_lossy(&bytes).to_lowercase();
+    assert!(logs.contains("session test log capture active"));
+    assert!(
+        !secrets.iter().any(|secret| logs.contains(secret)),
+        "secret appeared in captured logs"
+    );
+}
+
 pub(crate) fn assert_no_secrets(secrets: &[&str]) {
     for secret in secrets {
-        assert!(
-            distinctive(secret),
-            "a short hex-only value can appear in unrelated log text; it is not a checkable secret"
-        );
+        register_secret(secret);
     }
-    let bytes = logs().lock().unwrap();
-    let logs = String::from_utf8_lossy(&bytes);
-    assert!(logs.contains("session test log capture active"));
-    for secret in secrets {
-        assert!(
-            !logs
-                .to_ascii_lowercase()
-                .contains(&secret.to_ascii_lowercase()),
-            "secret appeared in captured logs"
-        );
-    }
+    scan_logs();
 }
+
+#[cfg(test)]
+mod tests;
