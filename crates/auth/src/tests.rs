@@ -1,4 +1,5 @@
 use super::*;
+use argon2::{Algorithm, Params, Version};
 use std::cell::Cell;
 
 // Public, deliberately known test inputs, never credentials for an account. gitleaks:allow
@@ -36,17 +37,22 @@ fn malformed_hash_runs_one_dummy_verification_and_discards_success() {
         "malformed",
         "$argon2id$v=19$m=19456,t=2,p=1",
         "$unknown$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$aGFzaA",
+        // Parses, and argon2 refuses it: eight encoded characters decode to six salt
+        // bytes. Judging the salt by the length of its text would take the fast path.
+        "$argon2id$v=19$m=19456,t=2,p=1$YWJjZGVm$aGFzaA",
+        // Parses, and argon2 refuses the parameters.
+        "$argon2id$v=19$m=1,t=1,p=1$c29tZXNhbHQ$aGFzaA",
     ] {
-        let calls = Cell::new(0);
+        let dummy_verifications = Cell::new(0);
         let result = verify_with(DUMMY_PASSWORD, malformed, |password, hash| {
-            calls.set(calls.get() + 1);
-            assert_eq!(hash.to_string(), db::DUMMY_PASSWORD_HASH);
-            Argon2::default()
-                .verify_password(password.as_bytes(), hash)
-                .is_ok()
+            if hash.to_string() == db::DUMMY_PASSWORD_HASH {
+                dummy_verifications.set(dummy_verifications.get() + 1);
+            }
+            Argon2::default().verify_password(password.as_bytes(), hash)
         });
-        assert!(!result);
-        assert_eq!(calls.get(), 1);
+        assert!(!result, "{malformed}");
+        // The dummy's own password must not authenticate, and must still cost its verification.
+        assert_eq!(dummy_verifications.get(), 1, "{malformed}");
         assert!(!verify_password(DUMMY_PASSWORD, malformed));
     }
 }

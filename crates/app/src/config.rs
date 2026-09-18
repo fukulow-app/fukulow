@@ -49,8 +49,19 @@ pub(crate) fn validate_public_origin(value: &str) -> Result<()> {
         return Err(invalid());
     }
     let suffix = authority.strip_prefix(host).ok_or_else(invalid)?;
-    if !suffix.is_empty() && (!suffix.starts_with(':') || suffix[1..].parse::<u16>().is_err()) {
-        return Err(invalid());
+    if !suffix.is_empty() {
+        let port = suffix.strip_prefix(':').ok_or_else(invalid)?;
+        // A leading zero parses and is a different string: :08443 would start the server
+        // and then never equal the :8443 a browser sends.
+        if port
+            .parse::<u16>()
+            .ok()
+            .map(|port| port.to_string())
+            .as_deref()
+            != Some(port)
+        {
+            return Err(invalid());
+        }
     }
     // A browser sends the serialized origin: lower-case scheme and host, and no port when
     // it is the scheme's default. The Origin check compares bytes, so a configuration

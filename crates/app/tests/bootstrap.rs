@@ -256,6 +256,8 @@ fn public_origin_is_required_and_invalid_values_are_not_disclosed() -> Result<()
         "https://chat.example.invalid:443",
         "http://LOCALHOST:8080",
         "http://localhost:80",
+        "https://chat.example.invalid:08443",
+        "http://localhost:0080",
     ] {
         let mut command = command();
         command.env("FUKULOW_PUBLIC_ORIGIN", rejected);

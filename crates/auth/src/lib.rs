@@ -2,8 +2,7 @@
 //! log tokens in plaintext, so persistence and diagnostics cannot reveal them.
 
 use argon2::{
-    Algorithm, Argon2, Params, PasswordHasher, PasswordVerifier, Version,
-    password_hash::phc::PasswordHash,
+    Argon2, PasswordHasher, PasswordVerifier, password_hash, password_hash::phc::PasswordHash,
 };
 use sha2::{Digest, Sha256};
 
@@ -42,36 +41,44 @@ fn hash_password_with_rng(
 
 pub fn verify_password(password: &str, phc: &str) -> bool {
     verify_with(password, phc, |password, hash| {
-        Argon2::default()
-            .verify_password(password.as_bytes(), hash)
-            .is_ok()
+        Argon2::default().verify_password(password.as_bytes(), hash)
     })
 }
 
 fn verify_with(
     password: &str,
     phc: &str,
-    verify: impl FnOnce(&str, &PasswordHash) -> bool,
+    verify: impl Fn(&str, &PasswordHash) -> Result<(), password_hash::Error>,
 ) -> bool {
-    let parsed = PasswordHash::new(phc).ok().filter(|hash| {
-        Algorithm::try_from(hash.algorithm.as_str()).is_ok()
-            && hash
-                .version
-                .is_none_or(|version| Version::try_from(version).is_ok())
-            && Params::try_from(hash).is_ok()
-            && hash.salt.as_ref().is_some_and(|salt| salt.len() >= 8)
-            && hash.hash.is_some()
-    });
-    match parsed {
-        Some(hash) => verify(password, &hash),
-        None => {
-            // Malformed stored hashes must cost a verification but can never authenticate.
-            if let Ok(dummy) = PasswordHash::new(db::DUMMY_PASSWORD_HASH) {
-                let _ = verify(password, &dummy);
-            }
-            false
+    // Only a mismatch is decided by the stored hash itself. Every other outcome — text
+    // that does not parse, an unknown algorithm, parameters or a salt argon2 refuses —
+    // is answered by verifying the dummy, so a stored hash that cannot be used costs
+    // what a wrong password costs.
+    //
+    // Deciding that from the parsed fields instead would repeat argon2's own acceptance
+    // rules here and get them subtly wrong: a salt of eight encoded characters passes a
+    // length check on the text and decodes to six bytes, which argon2 rejects before
+    // doing any work.
+    let decided = PasswordHash::new(phc)
+        .map_err(|_| ())
+        // A hash with no salt or no output cannot be verified, but the verifier reports it
+        // as a mismatch, so those two are checked here. Both are structure, not argon2's
+        // acceptance rules.
+        .and_then(|hash| match (&hash.salt, &hash.hash) {
+            (Some(_), Some(_)) => Ok(hash),
+            _ => Err(()),
+        })
+        .and_then(|hash| match verify(password, &hash) {
+            Ok(()) => Ok(true),
+            Err(password_hash::Error::PasswordInvalid) => Ok(false),
+            Err(_) => Err(()),
+        });
+    decided.unwrap_or_else(|()| {
+        if let Ok(dummy) = PasswordHash::new(db::DUMMY_PASSWORD_HASH) {
+            let _ = verify(password, &dummy);
         }
-    }
+        false
+    })
 }
 
 pub fn new_session_token() -> Result<(SessionToken, db::TokenHash), TokenError> {
