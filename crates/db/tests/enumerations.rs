@@ -89,3 +89,68 @@ async fn canonical_names_equal_database_checks() -> Result {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn audit_metadata_names_equal_rust_enumerations() -> Result {
+    let db = Database::new().await?;
+    let definition: String = sqlx::query_scalar(
+        "SELECT pg_get_functiondef('public.fukulow_audit_metadata_valid(jsonb)'::regprocedure)",
+    )
+    .fetch_one(&db.owner)
+    .await?;
+    let roles: BTreeSet<_> = OrganizationRole::ALL
+        .iter()
+        .map(|v| v.as_str())
+        .chain(TeamRole::ALL.iter().map(|v| v.as_str()))
+        .collect();
+    // RemovalReason is crate-private and has no as_str; read its exhaustive match
+    // arms rather than duplicate spellings that could drift from the constructors.
+    let reasons: BTreeSet<_> = include_str!("../src/audit.rs")
+        .split("RemovalReason::")
+        .skip(1)
+        .map(|arm| {
+            let (_, value) = arm.split_once("=>").expect("RemovalReason match arm");
+            value
+                .trim()
+                .strip_prefix('"')
+                .expect("literal reason")
+                .split_once('"')
+                .expect("closed reason literal")
+                .0
+        })
+        .collect();
+    assert!(!reasons.is_empty());
+    let scopes = BTreeSet::from([
+        ChannelScope::Organization.as_str(),
+        ChannelScope::Team(TeamId(Uuid::nil())).as_str(),
+    ]);
+    let kinds = InviteKind::ALL.iter().map(|v| v.as_str()).collect();
+    for (key, expected) in [
+        ("role", &roles),
+        ("from", &roles),
+        ("to", &roles),
+        ("reason", &reasons),
+        ("scope", &scopes),
+        ("kind", &kinds),
+    ] {
+        // Include SQL-only literals as well as Rust names: probing just Rust would
+        // miss a name added only to the database allow list.
+        let candidates: BTreeSet<_> = definition
+            .split('\'')
+            .skip(1)
+            .step_by(2)
+            .chain(expected.iter().copied())
+            .collect();
+        let mut accepted = BTreeSet::new();
+        for name in candidates {
+            let valid: bool = sqlx::query_scalar(
+                "SELECT public.fukulow_audit_metadata_valid(jsonb_build_object($1::text, $2::text))",
+            ).bind(key).bind(name).fetch_one(&db.app).await?;
+            if valid {
+                accepted.insert(name);
+            }
+        }
+        assert_eq!(&accepted, expected, "audit metadata key {key}");
+    }
+    db.finish().await
+}
