@@ -1,7 +1,9 @@
 use super::{LeaveServiceError, active_owners};
 use crate::audit::{Event, RemovalReason};
 use crate::context::{Context, begin};
-use domain::{ActorId, ChannelId, OrganizationId, OwnerChange, TeamId, check_owner_change};
+use domain::{
+    ActorId, ChannelId, MemberStatus, OrganizationId, OwnerChange, TeamId, check_owner_change,
+};
 use sqlx::{PgConnection, PgPool};
 
 pub async fn leave_service(pool: &PgPool, actor_id: ActorId) -> Result<(), LeaveServiceError> {
@@ -36,7 +38,9 @@ pub async fn leave_service(pool: &PgPool, actor_id: ActorId) -> Result<(), Leave
     for row in &memberships {
         let organization = OrganizationId(row.organization_id);
         leave_organization(&mut tx, organization, actor_id).await?;
-        if row.status != "left" {
+        let status = MemberStatus::parse(&row.status)
+            .ok_or_else(|| sqlx::Error::Protocol("invalid stored membership status".into()))?;
+        if status != MemberStatus::Left {
             Event::member_left(actor_id)
                 .write(&mut tx, organization, actor_id)
                 .await?;

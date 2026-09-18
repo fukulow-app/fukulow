@@ -370,21 +370,21 @@ fn expected_audits(
             "team.member.added",
             "actor",
             member.0,
-            json!({"team_id":team,"role":"member"}),
+            json!({"team_id":team.0,"role":"member"}),
         ),
         event(
             owner,
             "team.member.removed",
             "actor",
             member.0,
-            json!({"team_id":team,"reason":"removed"}),
+            json!({"team_id":team.0,"reason":"removed"}),
         ),
         event(
             owner,
             "team.member.role_changed",
             "actor",
             member.0,
-            json!({"team_id":team,"from":"member","to":"manager"}),
+            json!({"team_id":team.0,"from":"member","to":"manager"}),
         ),
     ]
 }

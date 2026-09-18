@@ -7,11 +7,15 @@ How the code is divided, and which way the divisions may depend on each other.
 | Crate | Responsibility | Must not |
 |---|---|---|
 | `protocol` | The wire format: frames and their serialisation | Know about storage, or depend on any type from `domain` |
-| `domain` | Types and rules: organization, team, channel, message, authorization | Know how anything is stored or transmitted |
+| `domain` | Types and rules: organization, team, channel, message, authorization; the canonical name of each enumerated value | Choose a serialization format, or depend on `serde` |
 | `db` | Persistence. **The only place that writes SQL** | Be bypassed: callers do not write SQL, and organization-scoped reads go through here |
 | `auth` | Authentication, sessions, invite tokens | Store or log a token in plaintext |
 | `realtime` | Subscriptions and fan-out | Expose a `tokio` channel type, or its lag error, in its public API |
 | `app` | The binary: wiring, configuration, shutdown | — |
+
+`domain` owns canonical names, not formats. `db` adopts them as stored values, held
+equal to the database's `CHECK` by a test; whether the wire uses them is for the
+caller that maps to `protocol` (#3, #6).
 
 Each library crate's `//!` documentation says the same, so the boundary is
 visible from the code as well. `app` is the binary and has none.

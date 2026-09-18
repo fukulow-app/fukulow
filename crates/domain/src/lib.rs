@@ -1,15 +1,11 @@
-//! Identities, conversation types and membership rules. It must not know how data is stored or
-//! transmitted, so the rules stay independent of persistence and transport.
+//! Identities, conversation types, membership rules and the canonical name of each enumerated
+//! value. It must not choose a serialization format or depend on serde.
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 macro_rules! identifier {
     ($name:ident) => {
-        #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-        )]
-        #[serde(transparent)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(pub Uuid);
     };
 }
@@ -19,10 +15,18 @@ identifier!(TeamId);
 
 macro_rules! enumeration {
     ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        #[serde(rename_all = "snake_case")]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum $name { $($variant),+ }
         impl $name {
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            pub fn parse(value: &str) -> Option<Self> {
+                match value {
+                    $($value => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
             pub const fn as_str(self) -> &'static str {
                 match self { $(Self::$variant => $value),+ }
             }
@@ -56,8 +60,7 @@ pub fn check_owner_change(active_owners: &[ActorId], change: OwnerChange) -> Res
 
 identifier!(ChannelId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "Uuid", into = "Uuid")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageId(Uuid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -108,8 +111,7 @@ impl ChannelScope {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "i64", into = "i64")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChannelSeq(i64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

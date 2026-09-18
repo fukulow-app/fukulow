@@ -4,29 +4,26 @@ use super::{
 };
 use crate::audit::Event;
 use crate::context::{Context, begin};
-use domain::{ActorId, OrganizationId, OrganizationRole, OwnerChange, check_owner_change};
+use domain::{
+    ActorId, MemberStatus, OrganizationId, OrganizationRole, OwnerChange, check_owner_change,
+};
 use sqlx::{PgConnection, PgPool};
-
-pub(super) fn organization_role(value: &str) -> Result<OrganizationRole, sqlx::Error> {
-    match value {
-        "owner" => Ok(OrganizationRole::Owner),
-        "admin" => Ok(OrganizationRole::Admin),
-        "member" => Ok(OrganizationRole::Member),
-        _ => Err(sqlx::Error::Protocol(
-            "invalid stored organization role".into(),
-        )),
-    }
-}
 
 async fn member(
     conn: &mut PgConnection,
     organization: OrganizationId,
     actor: ActorId,
-) -> Result<Option<(OrganizationRole, String)>, sqlx::Error> {
+) -> Result<Option<(OrganizationRole, MemberStatus)>, sqlx::Error> {
     let row = sqlx::query!("SELECT role, status FROM organization_members WHERE organization_id = $1 AND actor_id = $2", organization.0, actor.0)
         .fetch_optional(conn).await?;
-    row.map(|row| Ok((organization_role(&row.role)?, row.status)))
-        .transpose()
+    row.map(|row| {
+        let role = OrganizationRole::parse(&row.role)
+            .ok_or_else(|| sqlx::Error::Protocol("invalid stored organization role".into()))?;
+        let status = MemberStatus::parse(&row.status)
+            .ok_or_else(|| sqlx::Error::Protocol("invalid stored membership status".into()))?;
+        Ok((role, status))
+    })
+    .transpose()
 }
 
 pub async fn change_member_role(
@@ -47,14 +44,17 @@ pub async fn change_member_role(
     // Someone who has left is no longer a member; the row stays only as history. Changing
     // their role would write an audit record, which cannot be removed, about a membership
     // that grants nothing.
-    if status == "left" {
+    if status == MemberStatus::Left {
         return Err(ChangeMemberRoleError::NotFound);
     }
     if from == role {
         tx.commit().await?;
         return Ok(());
     }
-    if status == "active" && from == OrganizationRole::Owner && role != OrganizationRole::Owner {
+    if status == MemberStatus::Active
+        && from == OrganizationRole::Owner
+        && role != OrganizationRole::Owner
+    {
         check_owner_change(
             &active_owners(&mut tx, organization_id).await?,
             OwnerChange::Demote(actor_id),
@@ -89,7 +89,7 @@ pub async fn suspend_member(
     let (role, status) = member(&mut tx, organization_id, actor_id)
         .await?
         .ok_or(SuspendMemberError::NotFound)?;
-    if status != "active" {
+    if status != MemberStatus::Active {
         return Err(SuspendMemberError::NotActive);
     }
     if role == OrganizationRole::Owner {
@@ -124,7 +124,7 @@ pub async fn reactivate_member(
     if departed == Some(true) {
         return Err(ReactivateMemberError::ActorDeparted);
     }
-    if status != "suspended" {
+    if status != MemberStatus::Suspended {
         return Err(ReactivateMemberError::NotSuspended);
     }
     sqlx::query!("UPDATE organization_members SET status = 'active' WHERE organization_id = $1 AND actor_id = $2", organization_id.0, actor_id.0)

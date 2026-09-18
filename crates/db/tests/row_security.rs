@@ -217,7 +217,7 @@ async fn suspended_departure_audits_the_channel_organization_without_seeing_chan
             action: "channel.member.removed".into(),
             target_type: "actor".into(),
             target: member.0,
-            metadata: serde_json::json!({"channel_id": c.channel, "reason": "left_service"}),
+            metadata: serde_json::json!({"channel_id": c.channel.0, "reason": "left_service"}),
         }]
     );
     let remaining: i64 = sqlx::query_scalar(
