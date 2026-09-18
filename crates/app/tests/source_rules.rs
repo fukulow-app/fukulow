@@ -10,6 +10,9 @@
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use syn::punctuated::Punctuated;
+use syn::visit::{self, Visit};
+use syn::{AttrStyle, Attribute, ItemMod, Meta, Token};
 
 /// Every `expect(clippy::…)` in production code, as `(path, lint)`. Empty on purpose:
 /// the only exception the rule anticipates is startup, where failing to start is
@@ -53,42 +56,90 @@ fn production_files() -> Result<Vec<(String, String)>, Box<dyn Error>> {
     Ok(files)
 }
 
-/// Every attribute in `text`, as `(inner, body)`, with comments and all whitespace removed.
-/// Matching the written form instead misses what rustfmt and the grammar allow: a long
-/// `#[expect(...)]` is split over lines, `#![` may be followed by whitespace, and
-/// `#![cfg_attr(cond, allow(...))]` is an inner lint attribute too.
-fn attributes(text: &str) -> Vec<(bool, String)> {
-    let code: String = text
-        .lines()
-        .map(|line| line.split("//").next().unwrap_or_default())
-        .flat_map(str::chars)
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    let mut found = Vec::new();
-    let mut rest = code.as_str();
-    while let Some(start) = rest.find('#') {
-        let after = &rest[start + 1..];
-        let (inner, body) = match after.strip_prefix('!') {
-            Some(body) => (true, body),
-            None => (false, after),
-        };
-        if let Some(body) = body.strip_prefix('[') {
-            let mut depth = 1;
-            let end = body.char_indices().find_map(|(index, c)| {
-                match c {
-                    '[' => depth += 1,
-                    ']' => depth -= 1,
-                    _ => {}
-                }
-                (depth == 0).then_some(index)
-            });
-            if let Some(end) = end {
-                found.push((inner, body[..end].to_owned()));
-            }
-        }
-        rest = after;
+/// A lint attribute found in production code: whether it is inner (`#![...]`), whether
+/// it is `allow` or `expect`, and the clippy lints it names.
+struct LintAttribute {
+    inner: bool,
+    expect: bool,
+    clippy_lints: Vec<String>,
+}
+
+/// Reads attributes as Rust syntax, through `syn`. Matching their written form missed
+/// what the grammar and rustfmt allow — whitespace after `#!`, a `#[expect(...)]` split
+/// over lines, `//` or `[` inside a string, several attributes in one `cfg_attr` — and
+/// every miss was a way for an exception to escape the rule.
+#[derive(Default)]
+struct LintAttributes(Vec<LintAttribute>);
+
+impl LintAttributes {
+    fn of(source: &str) -> Result<Vec<LintAttribute>, syn::Error> {
+        let mut found = Self::default();
+        found.visit_file(&syn::parse_file(source)?);
+        Ok(found.0)
     }
-    found
+
+    /// `allow` and `expect` directly, or inside `cfg_attr(predicate, attr, attr, ...)`.
+    fn collect(&mut self, meta: &Meta, inner: bool) {
+        let Meta::List(list) = meta else {
+            return;
+        };
+        let name = list.path.get_ident().map(ToString::to_string);
+        let Ok(arguments) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+        else {
+            return;
+        };
+        match name.as_deref() {
+            Some("cfg_attr") => {
+                for attribute in arguments.iter().skip(1) {
+                    self.collect(attribute, inner);
+                }
+            }
+            Some(kind @ ("allow" | "expect")) => {
+                let clippy_lints = arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        // `reason = "..."` is a name-value pair; only paths are lints.
+                        Meta::Path(path)
+                            if path.segments.len() == 2
+                                && path.segments.first().is_some_and(|s| s.ident == "clippy") =>
+                        {
+                            path.segments.last().map(|s| s.ident.to_string())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                self.0.push(LintAttribute {
+                    inner,
+                    expect: kind == "expect",
+                    clippy_lints,
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `#[cfg(test)]` on an item: clippy treats it as test code, and so does this rule.
+fn is_test_only(attributes: &[Attribute]) -> bool {
+    attributes.iter().any(|attribute| match &attribute.meta {
+        Meta::List(list) => list.path.is_ident("cfg") && list.tokens.to_string() == "test",
+        _ => false,
+    })
+}
+
+impl<'ast> Visit<'ast> for LintAttributes {
+    fn visit_attribute(&mut self, attribute: &'ast Attribute) {
+        self.collect(
+            &attribute.meta,
+            matches!(attribute.style, AttrStyle::Inner(_)),
+        );
+    }
+
+    fn visit_item_mod(&mut self, module: &'ast ItemMod) {
+        if !is_test_only(&module.attrs) {
+            visit::visit_item_mod(self, module);
+        }
+    }
 }
 
 #[test]
@@ -99,17 +150,14 @@ fn production_code_has_no_inner_lint_attribute() -> Result<(), Box<dyn Error>> {
         "found only {} production files",
         files.len()
     );
-    let offenders: Vec<String> = files
-        .iter()
-        .flat_map(|(path, text)| {
-            attributes(text)
-                .into_iter()
-                .filter(|(inner, body)| {
-                    *inner && (body.contains("allow(") || body.contains("expect("))
-                })
-                .map(move |(_, body)| format!("{path}: #![{body}]"))
-        })
-        .collect();
+    let mut offenders = Vec::new();
+    for (path, text) in &files {
+        for attribute in LintAttributes::of(text)? {
+            if attribute.inner {
+                offenders.push(path.clone());
+            }
+        }
+    }
     assert!(
         offenders.is_empty(),
         "inner lint attributes in production code: {offenders:?}"
@@ -121,16 +169,11 @@ fn production_code_has_no_inner_lint_attribute() -> Result<(), Box<dyn Error>> {
 fn production_clippy_expectations_are_all_listed() -> Result<(), Box<dyn Error>> {
     let mut found: Vec<(String, String)> = Vec::new();
     for (path, text) in production_files()? {
-        for (_, body) in attributes(&text) {
-            let Some(expectation) = body.split("expect(").nth(1) else {
-                continue;
-            };
-            for part in expectation.split("clippy::").skip(1) {
-                let lint: String = part
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                    .collect();
-                found.push((path.clone(), lint));
+        for attribute in LintAttributes::of(&text)? {
+            if attribute.expect {
+                for lint in attribute.clippy_lints {
+                    found.push((path.clone(), lint));
+                }
             }
         }
     }
@@ -147,37 +190,66 @@ fn production_clippy_expectations_are_all_listed() -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
+/// Each form that a textual scan got wrong, read correctly.
 #[test]
-fn the_attribute_scanner_sees_every_written_form() {
-    let forms = [
+fn lint_attributes_are_read_as_syntax() -> Result<(), Box<dyn Error>> {
+    let cases: [(&str, bool, bool, &[&str]); 7] = [
         (
             "#![allow(clippy::unwrap_used)]",
             true,
-            "allow(clippy::unwrap_used)",
+            false,
+            &["unwrap_used"],
         ),
         (
             "#!  [\n  allow(\n clippy::panic )]",
             true,
-            "allow(clippy::panic)",
+            false,
+            &["panic"],
         ),
         (
             "#![cfg_attr(not(test), allow(clippy::panic))]",
             true,
-            "cfg_attr(not(test),allow(clippy::panic))",
+            false,
+            &["panic"],
         ),
         (
-            "#[expect(\n    clippy::unwrap_used,\n    reason = \"x\"\n)]",
+            "#[expect(\n    clippy::unwrap_used,\n    reason = \"x\"\n)]\nfn f() {}",
             false,
-            "expect(clippy::unwrap_used,reason=\"x\")",
+            true,
+            &["unwrap_used"],
         ),
-        ("// #![allow(clippy::panic)] in a comment", false, ""),
+        (
+            "const URL: &str = \"http://x\"; #[expect(clippy::panic, reason = \"y\")] fn f() {}",
+            false,
+            true,
+            &["panic"],
+        ),
+        (
+            "#[expect(clippy::unwrap_used, reason = \"a [ and clippy::panic in text\")] fn f() {}",
+            false,
+            true,
+            &["unwrap_used"],
+        ),
+        (
+            "#[cfg_attr(all(), expect(clippy::unwrap_used), expect(clippy::panic))] fn f() {}",
+            false,
+            true,
+            &["unwrap_used", "panic"],
+        ),
     ];
-    for (source, inner, body) in forms {
-        let found = attributes(source);
-        if body.is_empty() {
-            assert!(found.is_empty(), "{source:?} -> {found:?}");
-        } else {
-            assert_eq!(found, [(inner, body.to_owned())], "{source:?}");
-        }
+    for (source, inner, expect, lints) in cases {
+        let found = LintAttributes::of(source)?;
+        let named: Vec<&str> = found
+            .iter()
+            .flat_map(|a| a.clippy_lints.iter().map(String::as_str))
+            .collect();
+        assert_eq!(named, lints, "{source:?}");
+        assert!(
+            found.iter().all(|a| a.inner == inner && a.expect == expect),
+            "{source:?}"
+        );
     }
+    // A test module is test code: its attributes are not production exceptions.
+    assert!(LintAttributes::of("#[cfg(test)] mod tests { #![allow(clippy::panic)] }")?.is_empty());
+    Ok(())
 }

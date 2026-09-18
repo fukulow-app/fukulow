@@ -37,6 +37,7 @@ dependencies = [
  "realtime",
  "serde_json",
  "sqlx",
+ "syn 3.0.5",
  "time",
  "tokio",
  "tracing",
