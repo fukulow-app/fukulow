@@ -44,7 +44,11 @@ wrong.
   `ALTER DEFAULT PRIVILEGES`**
 - **Never `UPDATE` or `DELETE` an audit record**
 - **Never use a message id to order messages.** Use `channel_seq`
-- Never `unwrap()`, `expect()` or `panic!` on a request path. Never `unsafe`
+- Never `unwrap()`, `expect()`, `panic!`, `dbg!` or print to stdout or stderr in
+  production code. Workspace clippy lints deny these outside tests in the `build`
+  job. A justified exception uses `#[expect(clippy::…, reason = "…")]` at the
+  site, never `#[allow]`; `expect()` is only for cases where failing to start is
+  correct, naming what is missing and never a value. Never `unsafe`
 - Never hard-code text shown on screen
 - **Never add a dependency without saying why** in the pull request — what could
   not be done without it

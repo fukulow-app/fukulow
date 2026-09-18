@@ -1,1 +1,10 @@
 too-many-lines-threshold = 80
+# A failed assertion or fixture should fail its test, not require error plumbing.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+# Const evaluation is production code too; the defaults would exempt it.
+allow-unwrap-in-consts = false
+allow-expect-in-consts = false
