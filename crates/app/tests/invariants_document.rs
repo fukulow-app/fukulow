@@ -41,6 +41,7 @@ fn review_debt_errors(document: &str) -> Vec<String> {
             continue;
         };
         tables += 1;
+        let separator_line = line_number + 2;
         let separator = lines.next().and_then(|(_, line)| cells(line));
         if !separator.is_some_and(|cells| {
             cells.len() == header.len()
@@ -49,7 +50,7 @@ fn review_debt_errors(document: &str) -> Vec<String> {
                     dashes.len() >= 3 && dashes.chars().all(|character| character == '-')
                 })
         }) {
-            errors.push(format!("line {}: invalid table separator", line_number + 1));
+            errors.push(format!("line {separator_line}: invalid table separator"));
         }
         while let Some(&(line_number, line)) = lines.peek() {
             let Some(row) = cells(line) else {
@@ -67,9 +68,9 @@ fn review_debt_errors(document: &str) -> Vec<String> {
                 continue;
             }
             let enforcement = row[enforced_by];
-            let review = enforcement
-                .split(|character: char| !character.is_alphanumeric() && character != '_')
-                .any(|word| word.eq_ignore_ascii_case("review"));
+            // A substring, not a word: `_Review_`, `manual_review` and `reviewed` all say
+            // the rule rests on people. Matching whole words let those through.
+            let review = enforcement.to_ascii_lowercase().contains("review");
             let issue = enforcement
                 .as_bytes()
                 .windows(2)
@@ -103,7 +104,17 @@ fn table(row: &str) -> String {
 
 #[test]
 fn review_anywhere_requires_an_issue_in_the_same_cell() {
-    for enforcement in ["Review", "Manual review", "checked in rEvIeW", "**REVIEW**"] {
+    for enforcement in [
+        "Review",
+        "Manual review",
+        "checked in rEvIeW",
+        "**REVIEW**",
+        "_Review_",
+        "manual_review",
+        "reviewed by a maintainer",
+        "a reviewer checks it",
+        "reviews catch it",
+    ] {
         for citation in ["", " #", " #N", " # 58"] {
             let document = table(&format!(
                 "| Named rule #58 | {enforcement}{citation} | #58 |"
@@ -120,7 +131,9 @@ fn review_anywhere_requires_an_issue_in_the_same_cell() {
 
 #[test]
 fn other_enforcement_does_not_require_an_issue() {
-    for enforcement in ["Constraint", "preview test", "reviewer", "reviews", ""] {
+    // "preview" would also match: the check errs strict, and a cell that says preview can
+    // cite an issue or be reworded. Whole-word matching let `_Review_` through instead.
+    for enforcement in ["Constraint", "zizmor and Dependabot", ""] {
         assert!(
             review_debt_errors(&table(&format!("| Review #58 | {enforcement} | Review |")))
                 .is_empty()
