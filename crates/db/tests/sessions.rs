@@ -22,6 +22,8 @@ async fn credential_failures_each_verify_once_and_never_insert() -> Result {
     for (address, result, expected) in [
         (email, false, support::PASSWORD_HASH),
         ("unknown@example.invalid", true, db::DUMMY_PASSWORD_HASH),
+        // PostgreSQL text cannot hold U+0000: an unknown address, not a database error.
+        ("signin\u{0}@example.invalid", true, db::DUMMY_PASSWORD_HASH),
     ] {
         let calls = Arc::new(AtomicUsize::new(0));
         let count = calls.clone();

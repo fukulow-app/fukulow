@@ -17,6 +17,14 @@ pub async fn sign_in(
     token_hash: &TokenHash,
     expires_at: OffsetDateTime,
 ) -> Result<ActorId, SignInError> {
+    // PostgreSQL text cannot hold U+0000, and #3 and #30 refuse it when an address is
+    // stored, so such an address names no account. Setting it as the sign-in context
+    // would be a database error — a 500 where every credential failure is 401 — so it is
+    // answered as an unknown address, dummy verification included.
+    if email.contains('\0') {
+        let _ = tokio::task::spawn_blocking(move || verify(DUMMY_PASSWORD_HASH)).await;
+        return Err(SignInError::InvalidCredentials);
+    }
     let mut tx = begin(pool, Context::SignInEmail(email)).await?;
     let person = sqlx::query!(r#"SELECT actor_id, password_hash FROM users WHERE lower(email COLLATE "C") = lower($1 COLLATE "C")"#, email)
         .fetch_optional(&mut *tx).await?;
