@@ -584,6 +584,7 @@ struct RoleRules<'a> {
     violations: Vec<RoleViolation>,
     used_comparisons: Vec<String>,
     used_literals: Vec<(String, String)>,
+    scopes: Vec<String>,
 }
 
 fn path_name(path: &syn::Path) -> String {
@@ -616,6 +617,45 @@ fn is_role_type(name: &str) -> bool {
     matches!(name, "OrganizationRole" | "TeamRole")
 }
 
+// A variant is recognised by its UpperCamelCase shape, not by a list of today's
+// names: a variant added later is refused without editing this rule. Methods are
+// snake_case and associated constants (`ALL`) are SCREAMING_CASE, so neither matches.
+fn is_variant_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase())
+        && name.chars().any(|c| c.is_ascii_lowercase())
+}
+
+// The spellings `ChannelScope::as_str` returns, read from its source so that a scope
+// added later is reserved without editing this rule.
+fn scope_spellings() -> Result<Vec<String>, syn::Error> {
+    struct AsStr(Vec<String>, bool);
+    impl<'ast> Visit<'ast> for AsStr {
+        fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+            let scope = type_name(&item.self_ty) == "ChannelScope" && item.trait_.is_none();
+            for item in &item.items {
+                if let syn::ImplItem::Fn(function) = item {
+                    self.1 = scope && function.sig.ident == "as_str";
+                    visit::visit_impl_item_fn(self, function);
+                    self.1 = false;
+                }
+            }
+        }
+        fn visit_lit_str(&mut self, literal: &'ast syn::LitStr) {
+            if self.1 {
+                self.0.push(literal.value());
+            }
+        }
+    }
+    let file = syn::parse_file(include_str!("../../domain/src/lib.rs"))?;
+    let mut spellings = AsStr(Vec::new(), false);
+    spellings.visit_file(&file);
+    assert!(
+        !spellings.0.is_empty(),
+        "ChannelScope::as_str spellings not found"
+    );
+    Ok(spellings.0)
+}
+
 impl<'a> RoleRules<'a> {
     fn check(file: &'a str, modules: &[String], source: &str) -> Result<Self, syn::Error> {
         let mut rules = Self {
@@ -628,6 +668,7 @@ impl<'a> RoleRules<'a> {
             violations: Vec::new(),
             used_comparisons: Vec::new(),
             used_literals: Vec::new(),
+            scopes: scope_spellings()?,
         };
         if file.split('/').nth(2) != Some("tests") {
             rules.visit_file(&syn::parse_file(source)?);
@@ -691,14 +732,7 @@ impl<'a> RoleRules<'a> {
         } else {
             ty
         };
-        match ty {
-            "OrganizationRole" => matches!(
-                names.last().map(String::as_str),
-                Some("Owner" | "Admin" | "Member")
-            ),
-            "TeamRole" => matches!(names.last().map(String::as_str), Some("Manager" | "Member")),
-            _ => false,
-        }
+        is_role_type(ty) && names.last().is_some_and(|name| is_variant_name(name))
     }
 
     fn pattern_names_role(&self, pattern: &syn::Pat) -> bool {
@@ -724,13 +758,25 @@ impl<'a> RoleRules<'a> {
         paths.found
     }
 
+    // Any role variant inside an operand counts, not only a bare path: `&role !=
+    // &OrganizationRole::Admin`, a cast or a call argument must not hide one.
     fn expression_is_role(&self, expression: &syn::Expr) -> bool {
-        match expression {
-            syn::Expr::Path(path) => self.role_path(&path.path, path.qself.as_ref()),
-            syn::Expr::Paren(paren) => self.expression_is_role(&paren.expr),
-            syn::Expr::Group(group) => self.expression_is_role(&group.expr),
-            _ => false,
+        struct Paths<'a, 'b> {
+            rules: &'a RoleRules<'b>,
+            found: bool,
         }
+        impl<'ast> Visit<'ast> for Paths<'_, '_> {
+            fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+                self.found |= self.rules.role_path(&path.path, path.qself.as_ref());
+                visit::visit_expr_path(self, path);
+            }
+        }
+        let mut paths = Paths {
+            rules: self,
+            found: false,
+        };
+        paths.visit_expr(expression);
+        paths.found
     }
 
     fn literal(&mut self, value: &str) {
@@ -742,8 +788,7 @@ impl<'a> RoleRules<'a> {
             || domain::MemberStatus::ALL
                 .iter()
                 .any(|v| v.as_str() == value)
-            || domain::ChannelScope::Organization.as_str() == value
-            || domain::ChannelScope::Team(domain::TeamId(uuid::Uuid::nil())).as_str() == value;
+            || self.scopes.iter().any(|v| v == value);
         if !reserved {
             return;
         }
@@ -821,8 +866,18 @@ impl<'a> RoleRules<'a> {
             }
             return;
         }
+        // Tokens that are neither items nor expressions (a macro_rules! arm, json!'s
+        // object syntax) are not read as syntax. A role type there, other than a method
+        // or constant call such as `OrganizationRole::parse`, is refused when the same
+        // tokens can compare, match, bind, import or alias: fail closed rather than
+        // guess what the expansion does. A variant used only as a value passes.
+        if role_tokens(cursor, self.self_type.as_deref()) && binding_tokens(cursor) {
+            self.refuse("macro");
+        }
         while !cursor.eof() {
-            if let Some((inside, _, _, rest)) = cursor.any_group() {
+            if let Some((_, rest)) = cursor.ident() {
+                cursor = rest;
+            } else if let Some((inside, _, _, rest)) = cursor.any_group() {
                 self.macro_tokens(inside);
                 cursor = rest;
             } else if let Some((literal, rest)) = cursor.literal() {
@@ -837,6 +892,79 @@ impl<'a> RoleRules<'a> {
             }
         }
     }
+}
+
+fn role_tokens(mut cursor: syn::buffer::Cursor<'_>, self_type: Option<&str>) -> bool {
+    while !cursor.eof() {
+        if let Some((ident, rest)) = cursor.ident() {
+            let ident = ident.to_string();
+            if (is_role_type(&ident) || (ident == "Self" && self_type.is_some_and(is_role_type)))
+                && !role_member_call(rest)
+            {
+                return true;
+            }
+            cursor = rest;
+        } else if let Some((inside, _, _, rest)) = cursor.any_group() {
+            if role_tokens(inside, self_type) {
+                return true;
+            }
+            cursor = rest;
+        } else if let Some((_, rest)) = cursor.token_tree() {
+            cursor = rest;
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+fn binding_tokens(mut cursor: syn::buffer::Cursor<'_>) -> bool {
+    let mut previous = None;
+    while !cursor.eof() {
+        if let Some((ident, rest)) = cursor.ident() {
+            if matches!(
+                ident.to_string().as_str(),
+                "matches" | "match" | "if" | "let" | "use" | "type"
+            ) {
+                return true;
+            }
+            previous = None;
+            cursor = rest;
+        } else if let Some((punct, rest)) = cursor.punct() {
+            let pair = previous.map(|p: char| format!("{p}{}", punct.as_char()));
+            if matches!(pair.as_deref(), Some("==" | "!=" | "=>")) {
+                return true;
+            }
+            previous = Some(punct.as_char());
+            cursor = rest;
+        } else if let Some((inside, _, _, rest)) = cursor.any_group() {
+            if binding_tokens(inside) {
+                return true;
+            }
+            previous = None;
+            cursor = rest;
+        } else if let Some((_, rest)) = cursor.token_tree() {
+            previous = None;
+            cursor = rest;
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+fn role_member_call(cursor: syn::buffer::Cursor<'_>) -> bool {
+    let Some((first, cursor)) = cursor.punct() else {
+        return false;
+    };
+    let Some((second, cursor)) = cursor.punct() else {
+        return false;
+    };
+    first.as_char() == ':'
+        && second.as_char() == ':'
+        && cursor
+            .ident()
+            .is_some_and(|(name, _)| !is_variant_name(&name.to_string()))
 }
 
 struct MatchesArguments {
@@ -1125,6 +1253,16 @@ fn production_authorization_uses_capabilities() -> Result<(), Box<dyn Error>> {
         violations.is_empty(),
         "role source violations: {violations:#?}"
     );
+    let ambiguous = ambiguous_exceptions(
+        ROLE_COMPARISON_EXCEPTIONS
+            .iter()
+            .map(|(entry, _)| *entry)
+            .chain(ROLE_LITERAL_EXCEPTIONS.iter().map(|(entry, _, _)| *entry)),
+    );
+    assert!(
+        ambiguous.is_empty(),
+        "exception names an ambiguous compound impl: {ambiguous:?}"
+    );
     for (entry, reason) in ROLE_COMPARISON_EXCEPTIONS {
         assert!(!reason.is_empty());
         assert!(
@@ -1141,6 +1279,96 @@ fn production_authorization_uses_capabilities() -> Result<(), Box<dyn Error>> {
             "stale literal exception: {entry}"
         );
     }
+    Ok(())
+}
+
+// Every generic or compound impl shares one placeholder identity, so an exception
+// naming one would cover all of them.
+fn ambiguous_exceptions<'a>(entries: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
+    entries
+        .filter(|entry| entry.contains("<compound type>"))
+        .collect()
+}
+
+#[test]
+fn role_rule_bypass_fixtures() -> Result<(), Box<dyn Error>> {
+    // A variant added later is recognised by its shape, without editing the rule.
+    role_fixture(
+        "fn f() { let _ = role == OrganizationRole::Guest; }",
+        &["=="],
+    )?;
+    role_fixture(
+        "fn f() { match role { TeamRole::Observer => {} _ => {} } }",
+        &["match"],
+    )?;
+    // Today's variants have the shape the rule recognises.
+    for name in domain::OrganizationRole::ALL
+        .iter()
+        .map(|v| format!("{v:?}"))
+        .chain(domain::TeamRole::ALL.iter().map(|v| format!("{v:?}")))
+    {
+        assert!(is_variant_name(&name), "{name}");
+    }
+    assert!(!is_variant_name("ALL") && !is_variant_name("parse"));
+    // A variant inside an operand counts, not only a bare path.
+    for comparison in [
+        "&role != &OrganizationRole::Admin",
+        "role == *&TeamRole::Manager",
+        "role as u8 == OrganizationRole::Owner as u8",
+        "Some(role) == Some(TeamRole::Member)",
+    ] {
+        let form = if comparison.contains("!=") {
+            "!="
+        } else {
+            "=="
+        };
+        role_fixture(&format!("fn f() {{ let _ = {comparison}; }}"), &[form])?;
+    }
+    // Unparsed macro bodies fail closed when they can compare, match, bind or alias.
+    for source in [
+        "macro_rules! check { ($r:expr) => { if $r == OrganizationRole::Admin {} } }",
+        "macro_rules! check { ($r:expr) => { matches!($r, TeamRole::Manager) } }",
+        "macro_rules! alias { () => { type Chosen = OrganizationRole; } }",
+        "macro_rules! import { () => { use domain::TeamRole::*; } }",
+    ] {
+        let rules = RoleRules::check("crates/app/src/fixture.rs", &[], source)?;
+        assert!(
+            rules.violations.iter().any(|v| v.form == "macro"),
+            "{source}: {:?}",
+            rules.violations
+        );
+    }
+    // A variant used only as a value, and member calls, still pass.
+    role_fixture(
+        r#"fn f() { let _ = json!({"x": OrganizationRole::Member.as_str()}); }"#,
+        &[],
+    )?;
+    role_fixture(
+        "macro_rules! parse { ($v:expr) => { OrganizationRole::parse($v) } }",
+        &[],
+    )?;
+    // A compound impl identity cannot carry an exception.
+    assert_eq!(
+        ambiguous_exceptions(
+            [
+                "crates/db/src/a.rs::a::impl<<compound type>>::f",
+                "crates/db/src/a.rs::a::impl<Event>::f",
+            ]
+            .into_iter()
+        ),
+        ["crates/db/src/a.rs::a::impl<<compound type>>::f"]
+    );
+    // Scope spellings are read from ChannelScope::as_str and match what it returns.
+    let mut spellings = scope_spellings()?;
+    spellings.sort();
+    let mut actual = vec![
+        domain::ChannelScope::Organization.as_str().to_owned(),
+        domain::ChannelScope::Team(domain::TeamId(uuid::Uuid::nil()))
+            .as_str()
+            .to_owned(),
+    ];
+    actual.sort();
+    assert_eq!(spellings, actual);
     Ok(())
 }
 
@@ -1308,7 +1536,8 @@ fn role_literal_fixtures() -> Result<(), Box<dyn Error>> {
     )?;
     role_fixture(
         r#"enumeration!(OrganizationRole { Admin => "admin" });"#,
-        &["literal"],
+        // Outside domain the unparsed body names a role type beside `=>` as well.
+        &["macro", "literal"],
     )?;
     let canonical = RoleRules::check(
         "crates/domain/src/lib.rs",
@@ -1332,13 +1561,13 @@ fn role_literal_fixtures() -> Result<(), Box<dyn Error>> {
         r#"impl ChannelScope { fn other(self) -> &'static str { "organization" } }"#,
         r#"impl ChannelScope { fn as_str(self) { fn nested() { let _ = "team"; } } }"#,
     ] {
-        assert_eq!(
-            RoleRules::check("crates/domain/src/lib.rs", &[], source)?
-                .violations
-                .len(),
-            1,
-            "{source}"
-        );
+        let forms: Vec<_> = RoleRules::check("crates/domain/src/lib.rs", &[], source)?
+            .violations
+            .iter()
+            .map(|v| v.form)
+            .filter(|form| *form != "macro")
+            .collect();
+        assert_eq!(forms, ["literal"], "{source}");
     }
     Ok(())
 }
