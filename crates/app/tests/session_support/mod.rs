@@ -14,12 +14,12 @@ pub(crate) const PASSWORD: &str = "fixture-password";
 pub(crate) const DUMMY_PASSWORD: &str = "fixture-dummy-password";
 
 pub(crate) async fn person(db: &database::Database) -> Result<domain::ActorId> {
-    for value in [EMAIL, PASSWORD, "Fixture person"] {
+    for value in [EMAIL, PASSWORD, "Session fixture person"] {
         register_secret(value);
     }
     let hash = tokio::task::spawn_blocking(|| auth::hash_password(PASSWORD)).await??;
     let mut tx = db.app.begin().await?;
-    let actor = db::create_person(&mut tx, EMAIL, &hash, "Fixture person").await?;
+    let actor = db::create_person(&mut tx, EMAIL, &hash, "Session fixture person").await?;
     tx.commit().await?;
     Ok(actor)
 }
@@ -187,17 +187,23 @@ fn logs() -> &'static Arc<Mutex<Vec<u8>>> {
         buffer
     })
 }
+/// The fewest characters a value needs before finding it in the logs means anything.
+/// Independent of the production password minimum: this is about log noise, not strength.
+pub(crate) const MIN_CHECKABLE_SECRET_CHARS: usize = 16;
+
 /// Whether finding `value` in the logs would mean anything. The capture is shared by every
-/// test in the binary and holds the harness's throwaway database names, which are random
-/// hex; a short hex-only value turns up in them by chance, so it proves nothing (#56).
+/// test in the binary and is searched by plain substring, so a short value turns up in
+/// unrelated text by chance: random hex database names (#56), but equally a `@`, `x` or
+/// `a@b`. Length is the whole rule; fixtures are also chosen to be distinctive, which no
+/// function here can check.
 pub(crate) fn distinctive(value: &str) -> bool {
-    value.len() >= 16 || !value.chars().all(|c| c.is_ascii_hexdigit())
+    value.chars().count() >= MIN_CHECKABLE_SECRET_CHARS
 }
 
 fn check_distinctive(value: &str) {
     assert!(
         distinctive(value),
-        "a short hex-only value can appear in unrelated log text; it is not a checkable secret"
+        "a value shorter than 16 characters can appear in unrelated log text; it is not a checkable secret"
     );
 }
 

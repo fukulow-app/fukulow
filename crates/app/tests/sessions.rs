@@ -56,7 +56,7 @@ async fn sign_in_cookie_me_and_current_session_sign_out() -> Result {
     assert_eq!(response.status, 200);
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&response.body)?,
-        json!({"actor":{"id":actor.0.to_string(),"type":"human","display_name":"Fixture person"},"user":{"email":EMAIL}})
+        json!({"actor":{"id":actor.0.to_string(),"type":"human","display_name":"Session fixture person"},"user":{"email":EMAIL}})
     );
     database::sessions::clear_display_name(&db, actor).await?;
     let response = server

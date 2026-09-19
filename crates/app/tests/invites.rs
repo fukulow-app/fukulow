@@ -109,13 +109,13 @@ fn valid(token: &str) -> Value {
     for value in [
         "joiner@example.invalid",
         PASSWORD,
-        "  Fixture joiner\u{2003}",
+        "  Fixture joiner person\u{2003}",
         // Acceptance trims the display name; the stored form must be caught as well.
-        "Fixture joiner",
+        "Fixture joiner person",
     ] {
         session_support::register_secret(value);
     }
-    json!({"token":token,"email":"joiner@example.invalid","password":PASSWORD,"display_name":"  Fixture joiner\u{2003}"})
+    json!({"token":token,"email":"joiner@example.invalid","password":PASSWORD,"display_name":"  Fixture joiner person\u{2003}"})
 }
 fn no_authority(response: &Response) {
     assert_eq!(response.status, 204);
@@ -148,7 +148,7 @@ async fn owner_creates_accepts_and_revokes_with_exact_audits_and_secret_storage(
     no_authority(&f.accept(valid(token)).await?);
     let joined = fixtures::joined(&f.db, f.org, "joiner@example.invalid").await?;
     assert_eq!(joined["actor"]["type"], "human");
-    assert_eq!(joined["actor"]["display_name"], "Fixture joiner");
+    assert_eq!(joined["actor"]["display_name"], "Fixture joiner person");
     assert_eq!(joined["membership"]["status"], "active");
     assert_eq!(joined["membership"]["role"], "member");
     assert!(!joined.to_string().contains(PASSWORD));
@@ -414,16 +414,32 @@ async fn revocation_is_scoped_even_for_an_owner_of_both_organizations() -> Resul
 /// #56: the check refuses a value that could match log noise, so a caller cannot make it
 /// flaky again by passing one. It panics before taking the shared lock, poisoning nothing.
 #[test]
-#[should_panic(expected = "not a checkable secret")]
-fn a_short_hex_only_value_is_refused_as_a_secret() {
-    assert_no_secrets(&["bad"]);
+fn a_short_value_is_refused_as_a_secret() {
+    for value in [
+        "bad",
+        "g",
+        "@",
+        "xyz!",
+        "a@b",
+        "fifteen-chars!!",
+        "ééééééé-ééééééé",
+    ] {
+        let refused = std::panic::catch_unwind(|| assert_no_secrets(&[value]))
+            .expect_err("a short value was accepted as a secret");
+        let message = refused.downcast_ref::<&str>().copied().unwrap_or_default();
+        assert!(
+            message.contains("not a checkable secret"),
+            "{value}: {message}"
+        );
+    }
 }
 
 /// #56: the log capture is shared by every test in this binary and holds the harness's
 /// throwaway database names, which are random hex. A malformed field such as
-/// `"email": "bad"` was scanned as a secret and matched one of them by chance.
+/// `"email": "bad"` was scanned as a secret and matched one of them by chance. A short
+/// probe is sent but never registered, whatever its characters.
 #[tokio::test]
-async fn a_short_hex_only_field_is_not_scanned_as_a_secret() -> Result {
+async fn a_short_malformed_field_is_not_scanned_as_a_secret() -> Result {
     let f = Fixture::new(|_| {}).await?;
     assert_no_secrets(&[EMAIL]);
     // Stands in for another test's database name that happens to contain `bad`.
@@ -554,14 +570,18 @@ async fn acceptance_bounds_use_bytes_scalars_and_trim_only_the_display_name() ->
         let mut body = valid(&token);
         body["email"] = json!(format!("joiner-{index}@example.invalid"));
         body[field] = json!(value);
-        for key in ["email", "password", "display_name"] {
-            session_support::register_secret(body[key].as_str().unwrap());
-        }
-        // Acceptance trims the display name, so its stored form is registered too, except
-        // the one-character minimum under test here: it would match unrelated log text.
-        let trimmed = body["display_name"].as_str().unwrap().trim();
-        if trimmed.chars().count() > 1 {
-            session_support::register_secret(trimmed);
+        // The bounds under test include values too short to check in the shared logs
+        // (`a@b`, an eight-character password, ` x `). They are probes of the limits, not
+        // fixture secrets, so this helper leaves them out; the long cases are registered.
+        // Acceptance trims the display name, so its stored form is registered too.
+        let display_name = body["display_name"].as_str().unwrap();
+        for value in ["email", "password"]
+            .map(|key| body[key].as_str().unwrap())
+            .into_iter()
+            .chain([display_name, display_name.trim()])
+            .filter(|value| session_support::distinctive(value))
+        {
+            session_support::register_secret(value);
         }
         no_authority(&f.accept(body.clone()).await?);
         let stored = fixtures::joined(&f.db, f.org, body["email"].as_str().unwrap()).await?;

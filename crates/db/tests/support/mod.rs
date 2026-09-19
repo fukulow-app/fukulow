@@ -104,11 +104,12 @@ impl Database {
 
     pub(crate) async fn person(&self) -> Result<ActorId> {
         let email = format!("{}@example.invalid", Uuid::now_v7());
-        for value in [&email, PASSWORD_HASH, "Fixture person"] {
+        for value in [&email, PASSWORD_HASH, "Database fixture person"] {
             (self.register_secret)(value);
         }
         let mut conn = self.app.begin().await?;
-        let actor = db::create_person(&mut conn, &email, PASSWORD_HASH, "Fixture person").await?;
+        let actor =
+            db::create_person(&mut conn, &email, PASSWORD_HASH, "Database fixture person").await?;
         conn.commit().await?;
         Ok(actor)
     }

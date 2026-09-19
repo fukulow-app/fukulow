@@ -5,10 +5,20 @@ const CHILD: &str = "session_support::tests::leak_probe";
 
 #[test]
 #[should_panic(
-    expected = "a short hex-only value can appear in unrelated log text; it is not a checkable secret"
+    expected = "a value shorter than 16 characters can appear in unrelated log text; it is not a checkable secret"
 )]
-fn registration_refuses_short_hex_before_locking() {
-    register_secret("bad");
+fn registration_refuses_short_values_before_locking() {
+    register_secret("a@b");
+}
+
+#[test]
+fn the_boundary_is_sixteen_characters_not_bytes() {
+    assert!(!distinctive("fifteen-chars!!"));
+    assert!(distinctive("sixteen-chars!!!"));
+    assert!(distinctive("fixture-password"));
+    // Sixteen bytes but eight characters: still too short.
+    assert!(!distinctive(&"é".repeat(8)));
+    assert!(distinctive(&"é".repeat(16)));
 }
 
 #[test]
