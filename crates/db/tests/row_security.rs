@@ -98,6 +98,7 @@ async fn audit_and_migrations_are_not_readable() -> Result {
     let db = Database::new().await?;
     for query in [
         "SELECT * FROM audit_events",
+        "SELECT * FROM installation",
         "SELECT * FROM _sqlx_migrations",
     ] {
         rejected(sqlx::query(query).fetch_all(&db.app).await, "42501");

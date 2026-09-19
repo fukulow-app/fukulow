@@ -20,6 +20,9 @@ use syn::{AttrStyle, Attribute, ItemMod, Meta, Token};
 const PRODUCTION_CLIPPY_EXPECTATIONS: &[(&str, &str)] = &[
     // `fukulow help` prints its usage to standard output.
     ("crates/app/src/main.rs", "print_stdout"),
+    // Bootstrap prompts, successful slug and fixed failure diagnostics.
+    ("crates/app/src/bootstrap.rs", "print_stdout"),
+    ("crates/app/src/bootstrap.rs", "print_stderr"),
 ];
 
 fn workspace() -> PathBuf {

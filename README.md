@@ -41,8 +41,21 @@ export FUKULOW_DB_MIGRATOR_PASSWORD='…'   # the migration role
 export FUKULOW_DB_APP_PASSWORD='…'        # the server's role
 export FUKULOW_PUBLIC_ORIGIN=https://chat.example.com
 docker compose up -d --wait
+docker compose run --rm app fukulow bootstrap
 curl -i http://127.0.0.1:8080/health
 ```
+
+`fukulow bootstrap` creates the first organization and its owner, once.
+
+- **Prompts**, in a terminal: organization name, slug, display name, email, and the
+  password twice. The password is not echoed. It is never read from arguments, the
+  environment or a pipe; the command refuses when standard input is not a terminal.
+- **Connection**: only `DATABASE_URL`, as the server's role. It needs no server
+  origin or bind address.
+- **Result**: success prints the organization's slug. A repeated run exits 2, and
+  any other failure exits 1.
+
+Then sign in as the owner to create an invite.
 
 `compose.yaml` starts three services:
 

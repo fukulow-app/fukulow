@@ -3,6 +3,7 @@
     reason = "Each test crate uses a different subset of fixtures"
 )]
 
+pub(crate) mod installation;
 pub(crate) mod invites;
 pub(crate) mod sessions;
 

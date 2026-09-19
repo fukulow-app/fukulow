@@ -19,6 +19,7 @@ const TABLES: &[&str] = &[
     "audit_events",
     "channel_members",
     "channels",
+    "installation",
     "invites",
     "messages",
     "organization_members",
@@ -60,6 +61,7 @@ async fn defaults_and_timestamp_types_are_exact() -> Result {
         let column: String = row.try_get("column_name")?;
         let default: Option<String> = row.try_get("column_default")?;
         let expected = match (table.as_str(), column.as_str()) {
+            ("installation", "singleton") => Some("true"),
             (_, "created_at") => Some("now()"),
             ("organization_members" | "team_members", "role") => Some("'member'::text"),
             ("organization_members", "status") => Some("'active'::text"),
@@ -143,7 +145,7 @@ async fn actors_are_global_and_names_have_only_the_published_locations() -> Resu
         ]
         .map(|(t, c)| (t.to_owned(), c.to_owned()))
     );
-    let scoped: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('actors', 'users', 'sessions') AND column_name = 'organization_id'").fetch_one(&db.owner).await?;
+    let scoped: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('actors', 'users', 'sessions', 'installation') AND column_name = 'organization_id'").fetch_one(&db.owner).await?;
     assert_eq!(scoped, 0);
     db.finish().await
 }
@@ -279,7 +281,10 @@ async fn application_privileges_are_exact_for_every_table_and_column() -> Result
                     .fetch_one(&db.owner)
                     .await?;
             let expected = match privilege {
-                "SELECT" => table != "audit_events" && table != "_sqlx_migrations",
+                "SELECT" => !matches!(
+                    table.as_ref(),
+                    "audit_events" | "installation" | "_sqlx_migrations"
+                ),
                 "INSERT" => table != "_sqlx_migrations",
                 "DELETE" => {
                     table == "users" || table == "team_members" || table == "channel_members"
@@ -319,7 +324,7 @@ async fn check_columns(db: &Database, table: &str) -> Result {
                     .fetch_one(&db.owner)
                     .await?;
             let expected = match privilege {
-                "SELECT" => table != "audit_events" && table != "_sqlx_migrations",
+                "SELECT" => !matches!(table, "audit_events" | "installation" | "_sqlx_migrations"),
                 "INSERT" => table != "_sqlx_migrations",
                 "UPDATE" => updatable(table, &column),
                 _ => false,
