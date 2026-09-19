@@ -11,7 +11,7 @@ How the code is divided, and which way the divisions may depend on each other.
 | `db` | Persistence. **The only place that writes SQL** | Be bypassed: callers do not write SQL, and organization-scoped reads go through here |
 | `auth` | Authentication, sessions, invite tokens | Store or log a token in plaintext |
 | `realtime` | Subscriptions and fan-out | Expose a `tokio` channel type, or its lag error, in its public API |
-| `app` | The binary: wiring, configuration, shutdown | — |
+| `app` | The `fukulow` binary: wiring, configuration, shutdown. With no command it runs the server; `fukulow migrate` applies the embedded migrations and exits | Read `MIGRATOR_DATABASE_URL` anywhere but `fukulow migrate` |
 
 `domain` owns canonical names, not formats. `db` adopts them as stored values, held
 equal to the database's `CHECK` by a test; whether the wire uses them is for the

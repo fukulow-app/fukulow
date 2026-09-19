@@ -14,10 +14,13 @@ use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{AttrStyle, Attribute, ItemMod, Meta, Token};
 
-/// Every `expect(clippy::…)` in production code, as `(path, lint)`. Empty on purpose:
-/// the only exception the rule anticipates is startup, where failing to start is
-/// correct, and there is none yet.
-const PRODUCTION_CLIPPY_EXPECTATIONS: &[(&str, &str)] = &[];
+/// Every `expect(clippy::…)` in production code, as `(path, lint)`. Startup, where
+/// failing to start is correct, and the command line's own help text are the
+/// exceptions the rule anticipates.
+const PRODUCTION_CLIPPY_EXPECTATIONS: &[(&str, &str)] = &[
+    // `fukulow help` prints its usage to standard output.
+    ("crates/app/src/main.rs", "print_stdout"),
+];
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -513,5 +516,319 @@ fn route_registrations_are_found_in_every_calling_form() -> Result<(), Box<dyn E
         calls.0.is_empty(),
         "a test module's router is not production"
     );
+    Ok(())
+}
+
+/// The `std::env` functions that read a variable by name.
+const ENV_READERS: &[&str] = &["var", "var_os", "vars", "vars_os"];
+
+/// `Some(name)` when `path` names a `std::env` reader through its module, such as
+/// `env::var` or `std::env::var_os`. A bare `var` can only come from an import, which
+/// is refused, so the module segment is enough.
+fn env_reader(path: &syn::Path) -> Option<String> {
+    let mut names = path.segments.iter().rev().map(|s| s.ident.to_string());
+    let name = names.next()?;
+    (names.next().as_deref() == Some("env") && ENV_READERS.contains(&name.as_str())).then_some(name)
+}
+
+/// Where production code reads the migrator's URL, embeds migrations, or calls
+/// `db::migrate`, as `(file, form)`.
+#[derive(Default)]
+struct MigratorUses {
+    file: String,
+    found: Vec<(String, &'static str)>,
+}
+
+impl<'ast> Visit<'ast> for MigratorUses {
+    // `env::var("NAME")` and `env::var_os("NAME")` are the only accepted readers: called
+    // directly, with the name as a string literal, so the rule reads which variable it
+    // is. Any other reference to a reader is refused in `visit_expr_path`.
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        let direct = match &*call.func {
+            syn::Expr::Path(function) if function.qself.is_none() => {
+                env_reader(&function.path).filter(|name| name == "var" || name == "var_os")
+            }
+            _ => None,
+        };
+        if direct.is_none() {
+            visit::visit_expr_call(self, call);
+            return;
+        }
+        match call.args.iter().collect::<Vec<_>>().as_slice() {
+            [
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(name),
+                    ..
+                }),
+            ] => {
+                if name.value().contains("MIGRATOR") {
+                    self.found.push((self.file.clone(), "env"));
+                }
+            }
+            // A computed name could be assembled into the migrator's variable.
+            _ => self.found.push((self.file.clone(), "env name not literal")),
+        }
+        for argument in &call.args {
+            self.visit_expr(argument);
+        }
+    }
+
+    // Reached only by a reader that is not called directly: `let read = env::var;`,
+    // `.map(env::var_os)`, or `env::vars()`, which reads every variable at once.
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        match env_reader(&path.path).as_deref() {
+            Some("vars" | "vars_os") => self.found.push((self.file.clone(), "env vars")),
+            Some(_) => self.found.push((self.file.clone(), "env reader value")),
+            None => {}
+        }
+        visit::visit_expr_path(self, path);
+    }
+
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        self.extern_crate(item);
+        visit::visit_item_extern_crate(self, item);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if mac
+            .path
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "migrate")
+        {
+            self.found.push((self.file.clone(), "migrate!"));
+        }
+        visit::visit_macro(self, mac);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let names: Vec<_> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        if names.windows(2).any(|pair| pair == ["db", "migrate"]) {
+            self.found.push((self.file.clone(), "db::migrate"));
+        }
+        visit::visit_path(self, path);
+    }
+
+    // `use db::migrate` and `use db::{migrate as m}` are use trees, not paths.
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        fn imports_migrate(tree: &syn::UseTree, under_db: bool) -> bool {
+            match tree {
+                syn::UseTree::Path(path) => imports_migrate(&path.tree, path.ident == "db"),
+                syn::UseTree::Group(group) => group
+                    .items
+                    .iter()
+                    .any(|tree| imports_migrate(tree, under_db)),
+                syn::UseTree::Name(name) => under_db && name.ident == "migrate",
+                syn::UseTree::Rename(rename) => under_db && rename.ident == "migrate",
+                syn::UseTree::Glob(_) => under_db,
+            }
+        }
+        // `use db as database;` would let `database::migrate` pass unseen, so renaming
+        // the crate is refused outright rather than followed.
+        fn aliases_db(tree: &syn::UseTree, under_db: bool) -> bool {
+            match tree {
+                syn::UseTree::Path(path) => path.ident == "db" && aliases_db(&path.tree, true),
+                syn::UseTree::Group(group) => {
+                    group.items.iter().any(|tree| aliases_db(tree, under_db))
+                }
+                syn::UseTree::Rename(rename) => {
+                    if under_db {
+                        rename.ident == "self"
+                    } else {
+                        rename.ident == "db"
+                    }
+                }
+                syn::UseTree::Name(_) | syn::UseTree::Glob(_) => false,
+            }
+        }
+        if imports_migrate(&item.tree, false) {
+            self.found.push((self.file.clone(), "db::migrate"));
+        }
+        if aliases_db(&item.tree, false) {
+            self.found.push((self.file.clone(), "db alias"));
+        }
+        // Readers are recognised as `env::var` and `env::var_os`. Importing a reader
+        // (`use std::env::var;`, a glob) would leave a bare `var`, and renaming one or the
+        // module (`use std::env as e;`) would hide it, so both are refused in production.
+        fn env_import(tree: &syn::UseTree, under_env: bool) -> Option<&'static str> {
+            match tree {
+                syn::UseTree::Path(path) => {
+                    env_import(&path.tree, under_env || path.ident == "env")
+                }
+                syn::UseTree::Group(group) => group
+                    .items
+                    .iter()
+                    .find_map(|tree| env_import(tree, under_env)),
+                syn::UseTree::Rename(rename) => (rename.ident == "env"
+                    || (under_env
+                        && (rename.ident == "self"
+                            || ENV_READERS.iter().any(|name| rename.ident == name))))
+                .then_some("env alias"),
+                syn::UseTree::Name(name) => (under_env
+                    && ENV_READERS.iter().any(|reader| name.ident == reader))
+                .then_some("env import"),
+                syn::UseTree::Glob(_) => under_env.then_some("env import"),
+            }
+        }
+        if let Some(form) = env_import(&item.tree, false) {
+            self.found.push((self.file.clone(), form));
+        }
+        // `use sqlx::migrate as embed;` would make `embed!` embed migrations unseen, since
+        // the macro is found by its last segment. Renaming `migrate` is refused outside
+        // `db`, where `use db::{migrate as …}` is already a `db::migrate` import.
+        fn renames_migrate(tree: &syn::UseTree, under_db: bool) -> bool {
+            match tree {
+                syn::UseTree::Path(path) => renames_migrate(&path.tree, path.ident == "db"),
+                syn::UseTree::Group(group) => group
+                    .items
+                    .iter()
+                    .any(|tree| renames_migrate(tree, under_db)),
+                syn::UseTree::Rename(rename) => !under_db && rename.ident == "migrate",
+                syn::UseTree::Name(_) | syn::UseTree::Glob(_) => false,
+            }
+        }
+        if renames_migrate(&item.tree, false) {
+            self.found.push((self.file.clone(), "migrate alias"));
+        }
+        visit::visit_item_use(self, item);
+    }
+}
+
+impl MigratorUses {
+    fn extern_crate(&mut self, item: &syn::ItemExternCrate) {
+        if item.ident == "db" && item.rename.is_some() {
+            self.found.push((self.file.clone(), "db alias"));
+        }
+    }
+}
+
+fn migrator_uses(file: &str, source: &str) -> Result<Vec<(String, &'static str)>, syn::Error> {
+    let mut uses = MigratorUses {
+        file: file.to_owned(),
+        ..MigratorUses::default()
+    };
+    uses.visit_file(&syn::parse_file(source)?);
+    Ok(uses.found)
+}
+
+/// The server never runs migrations and never holds the migrator's credentials:
+/// only `fukulow migrate` reads `MIGRATOR_DATABASE_URL` and calls `db::migrate`,
+/// and only `db`'s migrations module embeds them.
+#[test]
+fn only_the_migrate_command_touches_the_migrator() -> Result<(), Box<dyn Error>> {
+    let mut found = Vec::new();
+    for file in ModuleTree::of_workspace()?.production {
+        let relative = file
+            .strip_prefix(workspace())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        found.extend(migrator_uses(&relative, &fs::read_to_string(file)?)?);
+    }
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            ("crates/app/src/migrate.rs".to_owned(), "db::migrate"),
+            ("crates/app/src/migrate.rs".to_owned(), "env"),
+            ("crates/db/src/migrations.rs".to_owned(), "migrate!"),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
+    for (source, form) in [
+        (
+            r#"fn f() { let _ = std::env::var("MIGRATOR_DATABASE_URL"); }"#,
+            "env",
+        ),
+        (
+            r#"fn f() { let _ = env::var_os("MIGRATOR_DATABASE_URL"); }"#,
+            "env",
+        ),
+        // A bare `var` is caught at its import, the only way it can name the reader.
+        (
+            r#"use std::env::var; fn f() { let _ = var("MIGRATOR_DATABASE_URL"); }"#,
+            "env import",
+        ),
+        (
+            r#"fn f() { let _ = sqlx::migrate!("../../migrations"); }"#,
+            "migrate!",
+        ),
+        (
+            "async fn f() { let _ = db::migrate(url).await; }",
+            "db::migrate",
+        ),
+        ("use db::migrate;", "db::migrate"),
+        ("use db::{connect, migrate as run};", "db::migrate"),
+        ("use db::*;", "db::migrate"),
+        // An alias of the crate is refused, since its calls would not read `db::migrate`.
+        ("use db as database;", "db alias"),
+        ("use ::db as database;", "db alias"),
+        ("use db::{self as database};", "db alias"),
+        ("use {db as database};", "db alias"),
+        ("extern crate db as database;", "db alias"),
+        // Renaming a reader or the module would hide a call from the rule.
+        ("use std::env::var as read_env;", "env alias"),
+        ("use std::env::var_os as read_env;", "env alias"),
+        ("use std::{env::{var_os as read_env}};", "env alias"),
+        ("use env::var as read_env;", "env alias"),
+        ("use ::std::env::vars as all_env;", "env alias"),
+        ("use std::env as environment;", "env alias"),
+        ("use std::{env as environment};", "env alias"),
+        ("use std::env::{self as environment};", "env alias"),
+        // Importing a reader would leave a bare `var` the rule cannot tell from others.
+        ("use std::env::var;", "env import"),
+        ("use std::env::{self, var_os};", "env import"),
+        ("use std::env::*;", "env import"),
+        // A reader taken as a function value, or given a computed name.
+        ("fn f() { let read = std::env::var; }", "env reader value"),
+        ("fn f() { let read = env::var_os; }", "env reader value"),
+        (
+            "fn f() { let _ = names.iter().map(env::var); }",
+            "env reader value",
+        ),
+        ("fn f() { let _ = env::var(name); }", "env name not literal"),
+        (
+            r#"fn f() { let _ = env::var_os(format!("{}_URL", prefix)); }"#,
+            "env name not literal",
+        ),
+        // Renaming the migration macro would hide `migrate!`.
+        ("use sqlx::migrate as embed;", "migrate alias"),
+        ("use ::sqlx::{migrate as embed};", "migrate alias"),
+        ("use sqlx::{self, migrate as embed};", "migrate alias"),
+        // Reading every variable at once includes the migrator's.
+        ("fn f() { let _ = std::env::vars(); }", "env vars"),
+        ("fn f() { for _ in env::vars_os() {} }", "env vars"),
+    ] {
+        assert_eq!(
+            migrator_uses("fixture.rs", source)?,
+            [("fixture.rs".to_owned(), form)],
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn ordinary_uses_are_not_migrator_uses() -> Result<(), Box<dyn Error>> {
+    for source in [
+        r#"fn f() { let _ = std::env::var("DATABASE_URL"); }"#,
+        r#"const USAGE: &str = "never MIGRATOR_DATABASE_URL";"#,
+        "use db::connect as open;",
+        "use other::db as unrelated;",
+        "use std::env;",
+        "use std::env::{self, VarError};",
+        "use std::env::args_os as arguments;",
+        "use other::var as unrelated;",
+        r#"fn f() { let _ = env::var("DATABASE_URL"); let _ = std::env::var_os("RUST_LOG"); }"#,
+        "fn f() { let _ = std::env::args_os(); let _ = other::var(name); }",
+        "fn f() { let read = settings::var; }",
+        "use sqlx::migrate::Migrator;",
+        "use sqlx::migrate::MigrateError as SqlxMigrateError;",
+    ] {
+        assert!(migrator_uses("fixture.rs", source)?.is_empty(), "{source}");
+    }
     Ok(())
 }

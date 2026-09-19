@@ -1,0 +1,83 @@
+name: compose
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate the required variables
+        run: |
+          # Fresh random passwords per run, with the characters the contract promises.
+          suffix="$(openssl rand -hex 12)"
+          {
+            echo "FUKULOW_DB_ADMIN_PASSWORD=a'd\"m\$i@n/%# ${suffix}"
+            echo "FUKULOW_DB_MIGRATOR_PASSWORD=m'i\"g\$r@a/%# ${suffix}"
+            echo "FUKULOW_DB_APP_PASSWORD=a'p\"p\$r@u/%# ${suffix}"
+            echo "FUKULOW_PUBLIC_ORIGIN=http://localhost:8080"
+          } >> "$GITHUB_ENV"
+      - name: docker compose up
+        run: docker compose up --detach --wait --wait-timeout 900
+      - name: /health answers 200 from the host
+        run: |
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/health)" = 200
+          test "$(docker compose ps --all --format '{{.Service}} {{.ExitCode}}' | grep '^migrate ')" = "migrate 0"
+      - name: Privileges stay separated in the running stack
+        run: |
+          names() { docker inspect "$(docker compose ps --all --quiet "$1")" --format '{{range .Config.Env}}{{println .}}{{end}}' | cut -d= -f1 | sort; }
+          has_value() { docker inspect "$(docker compose ps --all --quiet "$1")" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -cF -- "$2" || true; }
+          # `! cmd` never trips `set -e`, so an absence is checked with an explicit exit.
+          absent() { if names "$1" | grep -qx "$2"; then echo "$1 has $2"; exit 1; fi; }
+          names app | grep -qx DATABASE_URL
+          absent app MIGRATOR_DATABASE_URL
+          names migrate | grep -qx MIGRATOR_DATABASE_URL
+          absent migrate DATABASE_URL
+          absent app INSPECTOR_DATABASE_URL
+          absent migrate INSPECTOR_DATABASE_URL
+          test "$(has_value app "$FUKULOW_DB_ADMIN_PASSWORD")" = 0
+          test "$(has_value migrate "$FUKULOW_DB_ADMIN_PASSWORD")" = 0
+          test "$(has_value app "$FUKULOW_DB_MIGRATOR_PASSWORD")" = 0
+          test "$(has_value migrate "$FUKULOW_DB_APP_PASSWORD")" = 0
+          test "$(docker compose exec -T app id -u)" != 0
+          test "$(docker compose exec -T postgres psql -U postgres -d fukulow -Atc "SELECT string_agg(DISTINCT usename, ',') FROM pg_stat_activity WHERE datname = 'fukulow' AND backend_type = 'client backend' AND usename <> 'postgres'")" = fukulow_app
+          test "$(docker compose exec -T postgres psql -U postgres -d fukulow -Atc "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'fukulow%' AND (rolsuper OR rolbypassrls)")" = 0
+          test "$(docker inspect "$(docker compose ps --quiet postgres)" --format '{{len .HostConfig.PortBindings}}')" = 0
+          test "$(docker inspect "$(docker compose ps --quiet app)" --format '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostIp}} {{end}}{{end}}')" = "127.0.0.1 "
+      - name: A second up re-runs migrate, which applies nothing
+        run: |
+          # The exit code alone could be the first run's; a new start time shows it ran again,
+          # so the exit code and log checked after it are the second run's. Compose may reuse
+          # the container (both runs' logs) or recreate it (only the second's), so the log
+          # check asks for at least one line.
+          migrate_started() { docker inspect "$(docker compose ps --all --quiet migrate)" --format '{{.State.StartedAt}}'; }
+          first="$(migrate_started)"
+          docker compose up --detach --wait --wait-timeout 300
+          test "$(migrate_started)" != "$first"
+          test "$(docker compose ps --all --format '{{.Service}} {{.ExitCode}}' | grep '^migrate ')" = "migrate 0"
+          test "$(docker compose logs --no-color migrate | grep -c 'Migrations are up to date')" -ge 1
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/health)" = 200
+      - name: Logs on failure
+        if: failure()
+        # Not postgres: its log carries the message and detail db::migrate withholds,
+        # which can quote row values. migrate and app print only sanitized errors.
+        run: docker compose logs --no-color migrate app
+      - name: docker compose down
+        if: always()
+        run: docker compose down --volumes

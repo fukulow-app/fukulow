@@ -7,10 +7,12 @@
 mod audit;
 mod connection;
 mod context;
+mod migrations;
 mod operations;
 
 pub use connection::{ConnectError, connect};
 pub use context::{InvalidTokenHash, TokenHash};
+pub use migrations::{MigrateError, migrate};
 pub use operations::*;
 
 #[cfg(test)]
