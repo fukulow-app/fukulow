@@ -519,6 +519,9 @@ fn route_registrations_are_found_in_every_calling_form() -> Result<(), Box<dyn E
     Ok(())
 }
 
+/// The `std::env` functions that read a variable by name.
+const ENV_READERS: &[&str] = &["var", "var_os", "vars", "vars_os"];
+
 /// Where production code reads the migrator's URL, embeds migrations, or calls
 /// `db::migrate`, as `(file, form)`.
 #[derive(Default)]
@@ -608,6 +611,27 @@ impl<'ast> Visit<'ast> for MigratorUses {
         if aliases_db(&item.tree, false) {
             self.found.push((self.file.clone(), "db alias"));
         }
+        // The environment check reads calls by their last segment, `var` or `var_os`.
+        // `use std::env::var as read_env;` would hide one, so renaming an environment
+        // reader is refused in production outright rather than followed.
+        fn aliases_env_reader(tree: &syn::UseTree, under_env: bool) -> bool {
+            match tree {
+                syn::UseTree::Path(path) => {
+                    aliases_env_reader(&path.tree, under_env || path.ident == "env")
+                }
+                syn::UseTree::Group(group) => group
+                    .items
+                    .iter()
+                    .any(|tree| aliases_env_reader(tree, under_env)),
+                syn::UseTree::Rename(rename) => {
+                    under_env && ENV_READERS.iter().any(|name| rename.ident == name)
+                }
+                syn::UseTree::Name(_) | syn::UseTree::Glob(_) => false,
+            }
+        }
+        if aliases_env_reader(&item.tree, false) {
+            self.found.push((self.file.clone(), "env alias"));
+        }
         visit::visit_item_use(self, item);
     }
 }
@@ -683,6 +707,14 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
         ("use db::{self as database};", "db alias"),
         ("use {db as database};", "db alias"),
         ("extern crate db as database;", "db alias"),
+        // An alias of an environment reader is refused, since its calls would not read
+        // `var` or `var_os`.
+        ("use std::env::var as read_env;", "env alias"),
+        ("use std::env::var_os as read_env;", "env alias"),
+        ("use std::env::{var as read_env, var_os};", "env alias"),
+        ("use std::{env::{var_os as read_env}};", "env alias"),
+        ("use env::var as read_env;", "env alias"),
+        ("use ::std::env::vars as all_env;", "env alias"),
     ] {
         assert_eq!(
             migrator_uses("fixture.rs", source)?,
@@ -695,6 +727,10 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
         r#"const USAGE: &str = "never MIGRATOR_DATABASE_URL";"#,
         "use db::connect as open;",
         "use other::db as unrelated;",
+        "use std::env::var;",
+        "use std::env::{self, var_os};",
+        "use std::env::args_os as arguments;",
+        "use other::var as unrelated;",
     ] {
         assert!(migrator_uses("fixture.rs", source)?.is_empty(), "{source}");
     }
