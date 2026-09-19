@@ -101,3 +101,8 @@ operation_error!(RevokeInviteError {
     NotFound => "invite not found"
 });
 operation_error!(AcceptInviteError { InviteUnusable => "invite unusable", EmailTaken => "email is already registered" });
+
+operation_error!(BootstrapError {
+    AlreadyBootstrapped => "installation is already bootstrapped",
+    InvalidSlug => "invalid organization slug", EmailTaken => "email is already registered"
+});

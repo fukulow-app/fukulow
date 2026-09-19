@@ -70,6 +70,7 @@ strength of mechanisms in other rows.
 
 | Invariant | Enforced by | Lands in |
 |---|---|---|
+| **An installation is bootstrapped at most once** | Global `installation` has a boolean primary key constrained to true. Its insert precedes user and organization uniqueness checks in the transaction creating the actor, user, organization, owner and two audit records. Repeated and concurrent attempts are refused without new rows; a forced membership failure rolls everything back. The application has only INSERT, with ENABLE and FORCE row security admitting its own actor | in place |
 | **Every operation is performed by an actor**, and authorship, membership and audit reference `actors` — never `users` | Foreign keys to `actors (id)`. **A foreign key does not forbid NULL, so every one of these is also `NOT NULL`**: `messages.sender_actor_id`, `audit_events.actor_id`, `invites.created_by_actor_id`, and `sessions.actor_id` (to `users`). In `organization_members`, `team_members` and `channel_members`, `actor_id` is part of the primary key, which makes it `NOT NULL` | in place |
 | **Actors are global**: an actor belongs to no organization, and one actor may belong to several | `actors` has no `organization_id`; belonging is recorded only in membership tables | in place |
 | An actor row is never deleted | The application role holds no `DELETE` on `actors`. History references it | in place |

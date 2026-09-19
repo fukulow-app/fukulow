@@ -53,6 +53,9 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 # The binary is allowed to lose the error type at the boundary; libraries are not.
 anyhow = "1.0"
 thiserror = "2.0"
+# Reads the bootstrap password from the terminal with echo off (#30): never from
+# arguments or the environment, where the process list and `docker inspect` show it.
+rpassword = "7.5"
 # Default features are off: they add the `any` driver, which would let a query be
 # written against no particular database. `chrono` is not enabled -- one time type.
 sqlx = { version = "0.9", default-features = false, features = [

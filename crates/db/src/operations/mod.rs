@@ -1,3 +1,5 @@
+mod bootstrap;
+pub use bootstrap::bootstrap_installation;
 mod authorization;
 mod channels;
 mod messages;
