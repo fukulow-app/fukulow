@@ -24,10 +24,20 @@ pub(crate) struct Database {
     pub(crate) inspector: PgPool,
     pub(crate) app: PgPool,
     url: String,
+    register_secret: fn(&str),
+    scan_logs: fn(),
 }
 
 impl Database {
     pub(crate) async fn new() -> Result<Self> {
+        Self::with_secret_checks(|_| {}, || {}).await
+    }
+
+    pub(crate) async fn with_secret_checks(
+        register_secret: fn(&str),
+        scan_logs: fn(),
+    ) -> Result<Self> {
+        scan_logs();
         let migrator_url = std::env::var("MIGRATOR_DATABASE_URL")
             .map_err(|_| "MIGRATOR_DATABASE_URL is required")?;
         let inspector_url = std::env::var("INSPECTOR_DATABASE_URL")
@@ -77,6 +87,8 @@ impl Database {
             inspector,
             app,
             url,
+            register_secret,
+            scan_logs,
         })
     }
 
@@ -84,19 +96,20 @@ impl Database {
         self.app.close().await;
         self.owner.close().await;
         self.inspector.close().await;
-        Postgres::drop_database(&self.url).await?;
+        let result = Postgres::drop_database(&self.url).await;
+        (self.scan_logs)();
+        result?;
         Ok(())
     }
 
     pub(crate) async fn person(&self) -> Result<ActorId> {
+        let email = format!("{}@example.invalid", Uuid::now_v7());
+        for value in [&email, PASSWORD_HASH, "Database fixture person"] {
+            (self.register_secret)(value);
+        }
         let mut conn = self.app.begin().await?;
-        let actor = db::create_person(
-            &mut conn,
-            &format!("{}@example.invalid", Uuid::now_v7()),
-            PASSWORD_HASH,
-            "Fixture person",
-        )
-        .await?;
+        let actor =
+            db::create_person(&mut conn, &email, PASSWORD_HASH, "Database fixture person").await?;
         conn.commit().await?;
         Ok(actor)
     }
@@ -117,6 +130,7 @@ impl Database {
         actor: ActorId,
         role: &str,
     ) -> Result {
+        (self.register_secret)("Fixture override");
         sqlx::query("INSERT INTO organization_members (organization_id, actor_id, role, display_name) VALUES ($1, $2, $3, 'Fixture override')")
             .bind(organization.0).bind(actor.0).bind(role).execute(&self.inspector).await?;
         Ok(())

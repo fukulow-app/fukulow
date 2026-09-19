@@ -25,7 +25,7 @@ mod sessions;
 mod shutdown;
 
 use axum_extra::extract::cookie::{Cookie, SameSite};
-use database::{Database, Result};
+use database::Result;
 use domain::{ActorId, ActorType};
 use serde_json::json;
 use session_support::{EMAIL, ORIGIN, PASSWORD, Server, assert_no_secrets, person};
@@ -33,10 +33,10 @@ use time::Duration;
 
 #[tokio::test]
 async fn sign_in_cookie_me_and_current_session_sign_out() -> Result {
-    let db = Database::new().await?;
+    let db = session_support::database().await?;
     database::sessions::clock_at_sign_in(&db).await?;
     let actor = person(&db).await?;
-    let mut state = sessions::StateData::new(db.app.clone(), ORIGIN.into());
+    let mut state = session_support::state(db.app.clone());
     state.now = database::sessions::fixed_now;
     let server = Server::new(state).await?;
     let first = server.sign_in().await?;
@@ -56,7 +56,7 @@ async fn sign_in_cookie_me_and_current_session_sign_out() -> Result {
     assert_eq!(response.status, 200);
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&response.body)?,
-        json!({"actor":{"id":actor.0.to_string(),"type":"human","display_name":"Fixture person"},"user":{"email":EMAIL}})
+        json!({"actor":{"id":actor.0.to_string(),"type":"human","display_name":"Session fixture person"},"user":{"email":EMAIL}})
     );
     database::sessions::clear_display_name(&db, actor).await?;
     let response = server
@@ -116,9 +116,9 @@ fn assert_cookie(response: &session_support::Response, max_age: i64) -> Result {
 
 #[tokio::test]
 async fn origin_precedes_credentials_body_and_every_mutating_handler() -> Result {
-    let db = Database::new().await?;
+    let db = session_support::database().await?;
     let actor = person(&db).await?;
-    let server = Server::new(sessions::StateData::new(db.app.clone(), ORIGIN.into())).await?;
+    let server = Server::new(session_support::state(db.app.clone())).await?;
     let token = server.sign_in().await?.cookie()?;
     for origin in [
         None,
@@ -192,9 +192,9 @@ async fn origin_precedes_credentials_body_and_every_mutating_handler() -> Result
 
 #[tokio::test]
 async fn invalid_bodies_and_credentials_have_empty_indistinguishable_responses() -> Result {
-    let db = Database::new().await?;
+    let db = session_support::database().await?;
     let actor = person(&db).await?;
-    let server = Server::new(sessions::StateData::new(db.app.clone(), ORIGIN.into())).await?;
+    let server = Server::new(session_support::state(db.app.clone())).await?;
     for body in [
         "",
         "invalid",
@@ -249,10 +249,10 @@ async fn invalid_bodies_and_credentials_have_empty_indistinguishable_responses()
 
 #[tokio::test]
 async fn missing_unknown_expired_and_revoked_sessions_all_return_empty_401() -> Result {
-    let db = Database::new().await?;
+    let db = session_support::database().await?;
     database::sessions::clock_at_sign_in(&db).await?;
     let actor = person(&db).await?;
-    let mut state = sessions::StateData::new(db.app.clone(), ORIGIN.into());
+    let mut state = session_support::state(db.app.clone());
     state.now = database::sessions::fixed_now;
     let server = Server::new(state).await?;
     let token = server.sign_in().await?.cookie()?;
@@ -305,9 +305,9 @@ async fn missing_unknown_expired_and_revoked_sessions_all_return_empty_401() -> 
 async fn rng_and_database_failures_return_empty_500_without_inserting_or_logging_secrets() -> Result
 {
     for rng_failure in [true, false] {
-        let db = Database::new().await?;
+        let db = session_support::database().await?;
         let actor = person(&db).await?;
-        let mut state = sessions::StateData::new(db.app.clone(), ORIGIN.into());
+        let mut state = session_support::state(db.app.clone());
         if rng_failure {
             state.new_token = || Err(auth::TokenError);
         } else {
@@ -360,9 +360,9 @@ fn failing_token() -> std::result::Result<(auth::SessionToken, db::TokenHash), a
 #[tokio::test]
 async fn credential_failures_are_401_even_when_the_rng_fails_and_spend_no_token() -> Result {
     use std::sync::atomic::Ordering::SeqCst;
-    let db = Database::new().await?;
+    let db = session_support::database().await?;
     let actor = person(&db).await?;
-    let mut state = sessions::StateData::new(db.app.clone(), ORIGIN.into());
+    let mut state = session_support::state(db.app.clone());
     state.new_token = failing_token;
     let server = Server::new(state).await?;
     TOKEN_CALLS.store(0, SeqCst);
@@ -388,17 +388,17 @@ async fn credential_failures_are_401_even_when_the_rng_fails_and_spend_no_token(
 }
 
 fn record_token() -> std::result::Result<(auth::SessionToken, db::TokenHash), auth::TokenError> {
-    let (token, hash) = auth::new_session_token()?;
+    let (token, hash) = session_support::new_session_token()?;
     *GENERATED_TOKEN.lock().unwrap() = Some(token.as_str().to_owned());
     Ok((token, hash))
 }
 
 #[tokio::test]
 async fn every_registered_route_obeys_the_http_contract() -> Result {
-    let db = Database::new().await?;
+    let db = session_support::database().await?;
     person(&db).await?;
-    let server = Server::new(sessions::StateData::new(db.app.clone(), ORIGIN.into())).await?;
-    let unknown = auth::new_session_token()?.0;
+    let server = Server::new(session_support::state(db.app.clone())).await?;
+    let unknown = session_support::new_session_token()?.0;
     let mut failures = Vec::new();
     for route in route_registry::ROUTES {
         let path = route

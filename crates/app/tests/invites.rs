@@ -51,10 +51,10 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(configure: impl FnOnce(&mut sessions::StateData)) -> Result<Self> {
-        let db = Database::new().await?;
+        let db = session_support::database().await?;
         let actor = person(&db).await?;
         let org = db.organization(actor).await?;
-        let mut state = sessions::StateData::new(db.app.clone(), ORIGIN.into());
+        let mut state = session_support::state(db.app.clone());
         configure(&mut state);
         let server = Arc::new(Server::new(state).await?);
         let cookie = server.sign_in().await?.cookie()?;
@@ -90,33 +90,32 @@ impl Fixture {
         Ok(value)
     }
     async fn token(&self, max_uses: i32) -> Result<(String, InviteId)> {
-        let (token, hash) = auth::new_invite_token()?;
+        let (token, hash) = session_support::new_invite_token()?;
         let id = fixtures::invite(&self.db, self.actor, self.org, &hash, max_uses).await?;
         Ok((token.as_str().to_owned(), id))
     }
     async fn accept(&self, body: Value) -> Result<Response> {
-        let response = self
-            .request("POST", route_registry::ACCEPT_PATH, &body.to_string())
-            .await?;
-        // A malformed field such as `"email": "bad"` is not a secret, and a short hex-only
-        // value would match random hex in another test's log line (#56).
-        for key in ["token", "email", "password"] {
-            if let Some(value) = body[key]
-                .as_str()
-                .filter(|s| session_support::distinctive(s))
-            {
-                assert_no_secrets(&[value]);
-            }
-        }
-        Ok(response)
+        self.request("POST", route_registry::ACCEPT_PATH, &body.to_string())
+            .await
     }
     async fn finish(self) -> Result {
         drop(self.server);
-        self.db.finish().await
+        let result = self.db.finish().await;
+        session_support::scan_logs();
+        result
     }
 }
 fn valid(token: &str) -> Value {
-    json!({"token":token,"email":"joiner@example.invalid","password":PASSWORD,"display_name":"  Fixture joiner\u{2003}"})
+    for value in [
+        "joiner@example.invalid",
+        PASSWORD,
+        "  Fixture joiner person\u{2003}",
+        // Acceptance trims the display name; the stored form must be caught as well.
+        "Fixture joiner person",
+    ] {
+        session_support::register_secret(value);
+    }
+    json!({"token":token,"email":"joiner@example.invalid","password":PASSWORD,"display_name":"  Fixture joiner person\u{2003}"})
 }
 fn no_authority(response: &Response) {
     assert_eq!(response.status, 204);
@@ -149,7 +148,7 @@ async fn owner_creates_accepts_and_revokes_with_exact_audits_and_secret_storage(
     no_authority(&f.accept(valid(token)).await?);
     let joined = fixtures::joined(&f.db, f.org, "joiner@example.invalid").await?;
     assert_eq!(joined["actor"]["type"], "human");
-    assert_eq!(joined["actor"]["display_name"], "Fixture joiner");
+    assert_eq!(joined["actor"]["display_name"], "Fixture joiner person");
     assert_eq!(joined["membership"]["status"], "active");
     assert_eq!(joined["membership"]["role"], "member");
     assert!(!joined.to_string().contains(PASSWORD));
@@ -397,7 +396,7 @@ async fn links_ignore_every_host_header_combination() -> Result {
 async fn revocation_is_scoped_even_for_an_owner_of_both_organizations() -> Result {
     let f = Fixture::new(|_| {}).await?;
     let other = f.db.organization(f.actor).await?;
-    let (token, hash) = auth::new_invite_token()?;
+    let (token, hash) = session_support::new_invite_token()?;
     let id = fixtures::invite(&f.db, f.actor, other, &hash, 1).await?;
     let before = fixtures::stored(&f.db, other, id).await?;
     let audits_a = f.db.audit(f.org).await?;
@@ -415,21 +414,42 @@ async fn revocation_is_scoped_even_for_an_owner_of_both_organizations() -> Resul
 /// #56: the check refuses a value that could match log noise, so a caller cannot make it
 /// flaky again by passing one. It panics before taking the shared lock, poisoning nothing.
 #[test]
-#[should_panic(expected = "not a checkable secret")]
-fn a_short_hex_only_value_is_refused_as_a_secret() {
-    assert_no_secrets(&["bad"]);
+fn a_short_value_is_refused_as_a_secret() {
+    for value in [
+        "bad",
+        "g",
+        "@",
+        "xyz!",
+        "a@b",
+        "fifteen-chars!!",
+        "ééééééé-ééééééé",
+    ] {
+        let refused = std::panic::catch_unwind(|| assert_no_secrets(&[value]))
+            .expect_err("a short value was accepted as a secret");
+        // A literal message panics with `&str`; a formatted one would panic with `String`.
+        let message = refused
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| refused.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(
+            message.contains("not a checkable secret"),
+            "{value}: {message}"
+        );
+    }
 }
 
 /// #56: the log capture is shared by every test in this binary and holds the harness's
 /// throwaway database names, which are random hex. A malformed field such as
-/// `"email": "bad"` was scanned as a secret and matched one of them by chance.
+/// `"email": "bad"` was scanned as a secret and matched one of them by chance. A short
+/// probe is sent but never registered, whatever its characters.
 #[tokio::test]
-async fn a_short_hex_only_field_is_not_scanned_as_a_secret() -> Result {
+async fn a_short_malformed_field_is_not_scanned_as_a_secret() -> Result {
     let f = Fixture::new(|_| {}).await?;
     assert_no_secrets(&[EMAIL]);
     // Stands in for another test's database name that happens to contain `bad`.
     tracing::info!("DROP DATABASE fukulow_test_01a0bad5c0ffee");
-    let (token, _) = auth::new_invite_token()?;
+    let (token, _) = session_support::new_invite_token()?;
     f.accept(json!({"token": token.as_str(), "email": "bad"}))
         .await?
         .assert_error(404);
@@ -448,7 +468,7 @@ async fn unusable_tokens_precede_all_other_fields_and_cost_no_hash() -> Result {
     })
     .await?;
     for kind in ["unknown", "expired", "revoked", "exhausted", "team"] {
-        let (token, hash) = auth::new_invite_token()?;
+        let (token, hash) = session_support::new_invite_token()?;
         let id = fixtures::unusable(&f.db, f.actor, f.org, &hash, kind).await?;
         let before = fixtures::counts(&f.db).await?;
         let old_row = match id {
@@ -555,6 +575,19 @@ async fn acceptance_bounds_use_bytes_scalars_and_trim_only_the_display_name() ->
         let mut body = valid(&token);
         body["email"] = json!(format!("joiner-{index}@example.invalid"));
         body[field] = json!(value);
+        // The bounds under test include values too short to check in the shared logs
+        // (`a@b`, an eight-character password, ` x `). They are probes of the limits, not
+        // fixture secrets, so this helper leaves them out; the long cases are registered.
+        // Acceptance trims the display name, so its stored form is registered too.
+        let display_name = body["display_name"].as_str().unwrap();
+        for value in ["email", "password"]
+            .map(|key| body[key].as_str().unwrap())
+            .into_iter()
+            .chain([display_name, display_name.trim()])
+            .filter(|value| session_support::distinctive(value))
+        {
+            session_support::register_secret(value);
+        }
         no_authority(&f.accept(body.clone()).await?);
         let stored = fixtures::joined(&f.db, f.org, body["email"].as_str().unwrap()).await?;
         assert_eq!(
@@ -714,6 +747,7 @@ async fn twenty_concurrent_acceptances_admit_exactly_one_person() -> Result {
         let server = f.server.clone();
         let mut body = valid(&token);
         body["email"] = json!(format!("concurrent-{index}@example.invalid"));
+        session_support::register_secret(body["email"].as_str().unwrap());
         requests.push(tokio::spawn(async move {
             server
                 .request(
@@ -812,7 +846,7 @@ async fn registered_invite_routes_are_versioned_and_take_no_token_path_or_query(
 static GENERATED_INVITE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 fn record_invite_token() -> std::result::Result<(auth::InviteToken, db::TokenHash), auth::TokenError>
 {
-    let (token, hash) = auth::new_invite_token()?;
+    let (token, hash) = session_support::new_invite_token()?;
     *GENERATED_INVITE.lock().unwrap() = Some(token.as_str().to_owned());
     Ok((token, hash))
 }
