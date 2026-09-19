@@ -426,7 +426,12 @@ fn a_short_value_is_refused_as_a_secret() {
     ] {
         let refused = std::panic::catch_unwind(|| assert_no_secrets(&[value]))
             .expect_err("a short value was accepted as a secret");
-        let message = refused.downcast_ref::<&str>().copied().unwrap_or_default();
+        // A literal message panics with `&str`; a formatted one would panic with `String`.
+        let message = refused
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| refused.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
         assert!(
             message.contains("not a checkable secret"),
             "{value}: {message}"
