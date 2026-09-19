@@ -62,13 +62,16 @@ jobs:
           test "$(docker inspect "$(docker compose ps --quiet app)" --format '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostIp}} {{end}}{{end}}')" = "127.0.0.1 "
       - name: A second up re-runs migrate, which applies nothing
         run: |
-          # The exit code alone could be the first run's; a new start time shows it ran again.
+          # The exit code alone could be the first run's; a new start time shows it ran again,
+          # so the exit code and log checked after it are the second run's. Compose may reuse
+          # the container (both runs' logs) or recreate it (only the second's), so the log
+          # check asks for at least one line.
           migrate_started() { docker inspect "$(docker compose ps --all --quiet migrate)" --format '{{.State.StartedAt}}'; }
           first="$(migrate_started)"
           docker compose up --detach --wait --wait-timeout 300
           test "$(migrate_started)" != "$first"
           test "$(docker compose ps --all --format '{{.Service}} {{.ExitCode}}' | grep '^migrate ')" = "migrate 0"
-          test "$(docker compose logs --no-color migrate | grep -c 'Migrations are up to date')" = 2
+          test "$(docker compose logs --no-color migrate | grep -c 'Migrations are up to date')" -ge 1
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/health)" = 200
       - name: Logs on failure
         if: failure()
