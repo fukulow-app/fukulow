@@ -545,6 +545,11 @@ impl<'ast> Visit<'ast> for MigratorUses {
         visit::visit_expr_call(self, call);
     }
 
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        self.extern_crate(item);
+        visit::visit_item_extern_crate(self, item);
+    }
+
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         if mac
             .path
@@ -579,10 +584,39 @@ impl<'ast> Visit<'ast> for MigratorUses {
                 syn::UseTree::Glob(_) => under_db,
             }
         }
+        // `use db as database;` would let `database::migrate` pass unseen, so renaming
+        // the crate is refused outright rather than followed.
+        fn aliases_db(tree: &syn::UseTree, under_db: bool) -> bool {
+            match tree {
+                syn::UseTree::Path(path) => path.ident == "db" && aliases_db(&path.tree, true),
+                syn::UseTree::Group(group) => {
+                    group.items.iter().any(|tree| aliases_db(tree, under_db))
+                }
+                syn::UseTree::Rename(rename) => {
+                    if under_db {
+                        rename.ident == "self"
+                    } else {
+                        rename.ident == "db"
+                    }
+                }
+                syn::UseTree::Name(_) | syn::UseTree::Glob(_) => false,
+            }
+        }
         if imports_migrate(&item.tree, false) {
             self.found.push((self.file.clone(), "db::migrate"));
         }
+        if aliases_db(&item.tree, false) {
+            self.found.push((self.file.clone(), "db alias"));
+        }
         visit::visit_item_use(self, item);
+    }
+}
+
+impl MigratorUses {
+    fn extern_crate(&mut self, item: &syn::ItemExternCrate) {
+        if item.ident == "db" && item.rename.is_some() {
+            self.found.push((self.file.clone(), "db alias"));
+        }
     }
 }
 
@@ -643,6 +677,12 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
         ("use db::migrate;", "db::migrate"),
         ("use db::{connect, migrate as run};", "db::migrate"),
         ("use db::*;", "db::migrate"),
+        // An alias of the crate is refused, since its calls would not read `db::migrate`.
+        ("use db as database;", "db alias"),
+        ("use ::db as database;", "db alias"),
+        ("use db::{self as database};", "db alias"),
+        ("use {db as database};", "db alias"),
+        ("extern crate db as database;", "db alias"),
     ] {
         assert_eq!(
             migrator_uses("fixture.rs", source)?,
@@ -653,6 +693,8 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
     for source in [
         r#"fn f() { let _ = std::env::var("DATABASE_URL"); }"#,
         r#"const USAGE: &str = "never MIGRATOR_DATABASE_URL";"#,
+        "use db::connect as open;",
+        "use other::db as unrelated;",
     ] {
         assert!(migrator_uses("fixture.rs", source)?.is_empty(), "{source}");
     }
