@@ -1,10 +1,10 @@
 # Self-hosting: docker compose up
 #
 # Required in the environment or in .env, with no defaults:
-#   FUKULOW_POSTGRES_PASSWORD  PostgreSQL administrator; reaches only `postgres`
-#   FUKULOW_MIGRATOR_PASSWORD  the migration role; reaches `postgres` and `migrate`
-#   FUKULOW_APP_PASSWORD       the server's role; reaches `postgres` and `app`
-#   FUKULOW_PUBLIC_ORIGIN      the browser origin, such as https://chat.example.com
+#   FUKULOW_DB_ADMIN_PASSWORD     PostgreSQL administrator; reaches only `postgres`
+#   FUKULOW_DB_MIGRATOR_PASSWORD  the migration role; reaches `postgres` and `migrate`
+#   FUKULOW_DB_APP_PASSWORD       the server's role; reaches `postgres` and `app`
+#   FUKULOW_PUBLIC_ORIGIN         the browser origin, such as https://chat.example.com
 # Optional: FUKULOW_HTTP_PORT, the loopback host port for `app` (default 8080).
 #
 # For development and tests, use compose.dev.yaml instead.
@@ -14,10 +14,10 @@ services:
   postgres:
     image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
     environment:
-      POSTGRES_PASSWORD: ${FUKULOW_POSTGRES_PASSWORD:?FUKULOW_POSTGRES_PASSWORD is required}
+      POSTGRES_PASSWORD: ${FUKULOW_DB_ADMIN_PASSWORD:?FUKULOW_DB_ADMIN_PASSWORD is required}
       POSTGRES_DB: fukulow
-      FUKULOW_MIGRATOR_PASSWORD: ${FUKULOW_MIGRATOR_PASSWORD:?FUKULOW_MIGRATOR_PASSWORD is required}
-      FUKULOW_APP_PASSWORD: ${FUKULOW_APP_PASSWORD:?FUKULOW_APP_PASSWORD is required}
+      FUKULOW_DB_MIGRATOR_PASSWORD: ${FUKULOW_DB_MIGRATOR_PASSWORD:?FUKULOW_DB_MIGRATOR_PASSWORD is required}
+      FUKULOW_DB_APP_PASSWORD: ${FUKULOW_DB_APP_PASSWORD:?FUKULOW_DB_APP_PASSWORD is required}
     # No published port: only migrate and app reach it, over the compose network.
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -39,7 +39,7 @@ services:
       # The password is not in the URL, so it needs no URL encoding: sqlx reads
       # PGPASSWORD when the URL has none.
       MIGRATOR_DATABASE_URL: postgres://fukulow_migrator@postgres:5432/fukulow
-      PGPASSWORD: ${FUKULOW_MIGRATOR_PASSWORD:?FUKULOW_MIGRATOR_PASSWORD is required}
+      PGPASSWORD: ${FUKULOW_DB_MIGRATOR_PASSWORD:?FUKULOW_DB_MIGRATOR_PASSWORD is required}
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,7 +50,7 @@ services:
     image: fukulow:local
     environment:
       DATABASE_URL: postgres://fukulow_app@postgres:5432/fukulow
-      PGPASSWORD: ${FUKULOW_APP_PASSWORD:?FUKULOW_APP_PASSWORD is required}
+      PGPASSWORD: ${FUKULOW_DB_APP_PASSWORD:?FUKULOW_DB_APP_PASSWORD is required}
       FUKULOW_PUBLIC_ORIGIN: ${FUKULOW_PUBLIC_ORIGIN:?FUKULOW_PUBLIC_ORIGIN is required}
       RUST_LOG: info
     ports:

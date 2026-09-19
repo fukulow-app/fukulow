@@ -25,7 +25,9 @@ part-time staff do not need a second identity.
 
 The interface is Japanese first. The names above are the identifiers used in
 the code, the API and this documentation; the words shown on screen live in one
-translation file and are not hard-coded.
+translation file and are not hard-coded. Operator-facing text — the `fukulow`
+command's help and prompts, startup errors and logs — is English and fixed; it is
+read by whoever runs the deployment, not shown in the client.
 
 ## Running it
 
@@ -34,9 +36,9 @@ translation file and are not hard-coded.
 Requires Docker with Compose v2. Linux or macOS; Windows is not a supported host.
 
 ```bash
-export FUKULOW_POSTGRES_PASSWORD='…'   # PostgreSQL administrator
-export FUKULOW_MIGRATOR_PASSWORD='…'   # the migration role
-export FUKULOW_APP_PASSWORD='…'        # the server's role
+export FUKULOW_DB_ADMIN_PASSWORD='…'      # PostgreSQL administrator
+export FUKULOW_DB_MIGRATOR_PASSWORD='…'   # the migration role
+export FUKULOW_DB_APP_PASSWORD='…'        # the server's role
 export FUKULOW_PUBLIC_ORIGIN=https://chat.example.com
 docker compose up -d --wait
 curl -i http://127.0.0.1:8080/health

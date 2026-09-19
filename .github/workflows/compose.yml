@@ -28,9 +28,9 @@ jobs:
           # Fresh random passwords per run, with the characters the contract promises.
           suffix="$(openssl rand -hex 12)"
           {
-            echo "FUKULOW_POSTGRES_PASSWORD=a'd\"m\$i@n/%# ${suffix}"
-            echo "FUKULOW_MIGRATOR_PASSWORD=m'i\"g\$r@a/%# ${suffix}"
-            echo "FUKULOW_APP_PASSWORD=a'p\"p\$r@u/%# ${suffix}"
+            echo "FUKULOW_DB_ADMIN_PASSWORD=a'd\"m\$i@n/%# ${suffix}"
+            echo "FUKULOW_DB_MIGRATOR_PASSWORD=m'i\"g\$r@a/%# ${suffix}"
+            echo "FUKULOW_DB_APP_PASSWORD=a'p\"p\$r@u/%# ${suffix}"
             echo "FUKULOW_PUBLIC_ORIGIN=http://localhost:8080"
           } >> "$GITHUB_ENV"
       - name: docker compose up
@@ -51,10 +51,10 @@ jobs:
           absent migrate DATABASE_URL
           absent app INSPECTOR_DATABASE_URL
           absent migrate INSPECTOR_DATABASE_URL
-          test "$(has_value app "$FUKULOW_POSTGRES_PASSWORD")" = 0
-          test "$(has_value migrate "$FUKULOW_POSTGRES_PASSWORD")" = 0
-          test "$(has_value app "$FUKULOW_MIGRATOR_PASSWORD")" = 0
-          test "$(has_value migrate "$FUKULOW_APP_PASSWORD")" = 0
+          test "$(has_value app "$FUKULOW_DB_ADMIN_PASSWORD")" = 0
+          test "$(has_value migrate "$FUKULOW_DB_ADMIN_PASSWORD")" = 0
+          test "$(has_value app "$FUKULOW_DB_MIGRATOR_PASSWORD")" = 0
+          test "$(has_value migrate "$FUKULOW_DB_APP_PASSWORD")" = 0
           test "$(docker compose exec -T app id -u)" != 0
           test "$(docker compose exec -T postgres psql -U postgres -d fukulow -Atc "SELECT string_agg(DISTINCT usename, ',') FROM pg_stat_activity WHERE datname = 'fukulow' AND backend_type = 'client backend' AND usename <> 'postgres'")" = fukulow_app
           test "$(docker compose exec -T postgres psql -U postgres -d fukulow -Atc "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'fukulow%' AND (rolsuper OR rolbypassrls)")" = 0
