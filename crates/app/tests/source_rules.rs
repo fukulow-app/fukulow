@@ -673,6 +673,23 @@ impl<'ast> Visit<'ast> for MigratorUses {
         if let Some(form) = env_import(&item.tree, false) {
             self.found.push((self.file.clone(), form));
         }
+        // `use sqlx::migrate as embed;` would make `embed!` embed migrations unseen, since
+        // the macro is found by its last segment. Renaming `migrate` is refused outside
+        // `db`, where `use db::{migrate as …}` is already a `db::migrate` import.
+        fn renames_migrate(tree: &syn::UseTree, under_db: bool) -> bool {
+            match tree {
+                syn::UseTree::Path(path) => renames_migrate(&path.tree, path.ident == "db"),
+                syn::UseTree::Group(group) => group
+                    .items
+                    .iter()
+                    .any(|tree| renames_migrate(tree, under_db)),
+                syn::UseTree::Rename(rename) => !under_db && rename.ident == "migrate",
+                syn::UseTree::Name(_) | syn::UseTree::Glob(_) => false,
+            }
+        }
+        if renames_migrate(&item.tree, false) {
+            self.found.push((self.file.clone(), "migrate alias"));
+        }
         visit::visit_item_use(self, item);
     }
 }
@@ -777,6 +794,10 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
             r#"fn f() { let _ = env::var_os(format!("{}_URL", prefix)); }"#,
             "env name not literal",
         ),
+        // Renaming the migration macro would hide `migrate!`.
+        ("use sqlx::migrate as embed;", "migrate alias"),
+        ("use ::sqlx::{migrate as embed};", "migrate alias"),
+        ("use sqlx::{self, migrate as embed};", "migrate alias"),
         // Reading every variable at once includes the migrator's.
         ("fn f() { let _ = std::env::vars(); }", "env vars"),
         ("fn f() { for _ in env::vars_os() {} }", "env vars"),
@@ -787,6 +808,11 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
             "{source}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn ordinary_uses_are_not_migrator_uses() -> Result<(), Box<dyn Error>> {
     for source in [
         r#"fn f() { let _ = std::env::var("DATABASE_URL"); }"#,
         r#"const USAGE: &str = "never MIGRATOR_DATABASE_URL";"#,
@@ -799,6 +825,8 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
         r#"fn f() { let _ = env::var("DATABASE_URL"); let _ = std::env::var_os("RUST_LOG"); }"#,
         "fn f() { let _ = std::env::args_os(); let _ = other::var(name); }",
         "fn f() { let read = settings::var; }",
+        "use sqlx::migrate::Migrator;",
+        "use sqlx::migrate::MigrateError as SqlxMigrateError;",
     ] {
         assert!(migrator_uses("fixture.rs", source)?.is_empty(), "{source}");
     }
