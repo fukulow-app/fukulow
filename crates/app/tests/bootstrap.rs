@@ -34,7 +34,7 @@ use anyhow::Result;
 use support::AppProcess;
 
 fn command() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_app"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fukulow"));
     command
         .env("FUKULOW_BIND_ADDR", "127.0.0.1:0")
         .env("RUST_LOG", "info")

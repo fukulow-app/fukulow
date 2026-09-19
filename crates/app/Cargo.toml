@@ -7,6 +7,12 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# The package stays `app` in the workspace; the executable self-hosters run is
+# `fukulow`, with `migrate` as a subcommand.
+[[bin]]
+name = "fukulow"
+path = "src/main.rs"
+
 [dependencies]
 protocol = { workspace = true }
 domain = { workspace = true }

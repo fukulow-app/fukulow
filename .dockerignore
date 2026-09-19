@@ -1,0 +1,10 @@
+# Only what the build needs. .env holds credentials and must never reach an image.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!clippy.toml
+!crates/
+!migrations/
+!.sqlx/
+crates/*/target

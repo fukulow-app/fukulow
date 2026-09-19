@@ -29,13 +29,58 @@ translation file and are not hard-coded.
 
 ## Running it
 
+### Self-hosting with Docker Compose
+
+Requires Docker with Compose v2. Linux or macOS; Windows is not a supported host.
+
+```bash
+export FUKULOW_POSTGRES_PASSWORD='…'   # PostgreSQL administrator
+export FUKULOW_MIGRATOR_PASSWORD='…'   # the migration role
+export FUKULOW_APP_PASSWORD='…'        # the server's role
+export FUKULOW_PUBLIC_ORIGIN=https://chat.example.com
+docker compose up -d --wait
+curl -i http://127.0.0.1:8080/health
+```
+
+`compose.yaml` starts three services:
+
+| Service | What it does |
+|---|---|
+| `postgres` | PostgreSQL 17. **No published port**: only the other two services reach it |
+| `migrate` | Runs `fukulow migrate` as `fukulow_migrator` once, then exits |
+| `app` | Runs the server as `fukulow_app`, **only after `migrate` succeeded**. Published on `127.0.0.1:${FUKULOW_HTTP_PORT:-8080}`: loopback only, because exposing it is a deployment decision |
+
+- **All four variables above are required and have no default.** Without any one
+  of them, `docker compose up` refuses to start and names the missing variable.
+- **Passwords are given raw.** They may contain any printable character, including
+  `'`, `"`, `$`, `@`, `/`, `%`, `#` and spaces.
+  - They are never placed in a URL, and the role setup quotes them as SQL literals.
+  - The administrator password reaches only `postgres`, and each role's password
+    reaches only the service that uses it.
+- **In a `.env` file, Compose expands `$` inside values.** Write a password
+  containing `$` in single quotes there, or export it from the shell as above.
+- `FUKULOW_PUBLIC_ORIGIN` follows the rules below.
+- The image runs as a non-root user and contains only the `fukulow` binary.
+  `docker compose run --rm app fukulow help` lists its commands.
+- **Role setup (`docker/compose-init/`) runs only when the volume is new.**
+  - Changing a password variable afterwards does not change the role's password.
+    Change it in PostgreSQL too, with `ALTER ROLE … PASSWORD`.
+  - To start over, remove the volume with `docker compose down -v`. **This deletes
+    all data.**
+- Every `docker compose up` re-runs `migrate`. It applies only migrations not yet
+  applied, and exits.
+
+TLS termination, backups and upgrades are not covered yet.
+
+### Development
+
 Requires [Rust](https://rustup.rs/); the pinned toolchain in
 `rust-toolchain.toml` is installed for you on first build. Linux or macOS —
 shutdown is handled through Unix signals, and Windows is not a supported host.
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres
+docker compose -f compose.dev.yaml up -d postgres
 set -a; . ./.env; set +a
 cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features postgres,rustls
 cargo sqlx migrate run --database-url "$MIGRATOR_DATABASE_URL"
@@ -74,10 +119,15 @@ and uses the separate `MIGRATOR_DATABASE_URL`.
 an existing development volume, apply it once before migrating:
 
 ```bash
-docker compose exec -T postgres psql -U fukulow -d fukulow_dev < docker/init/001-roles.sql
+docker compose -f compose.dev.yaml exec -T postgres psql -U fukulow -d fukulow_dev < docker/init/001-roles.sql
 ```
 
-For self-hosting, run the following once as the cluster administrator in the target
+`compose.dev.yaml` uses the project name `fukulow-dev`, so it runs beside
+`compose.yaml` without sharing a volume, container or port. A development volume
+created before this name was set belongs to the old project. Remove it and let the
+new volume initialise, or keep the old container running under its old project.
+
+For self-hosting without Compose, run the following once as the cluster administrator in the target
 database, replacing the development passwords and database name first. Neither role
 is a superuser or has `BYPASSRLS`. Only the migrator needs `CREATEDB`, for isolated
 test databases; it can be omitted on a production-only migration account.

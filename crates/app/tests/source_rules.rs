@@ -14,10 +14,13 @@ use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{AttrStyle, Attribute, ItemMod, Meta, Token};
 
-/// Every `expect(clippy::…)` in production code, as `(path, lint)`. Empty on purpose:
-/// the only exception the rule anticipates is startup, where failing to start is
-/// correct, and there is none yet.
-const PRODUCTION_CLIPPY_EXPECTATIONS: &[(&str, &str)] = &[];
+/// Every `expect(clippy::…)` in production code, as `(path, lint)`. Startup, where
+/// failing to start is correct, and the command line's own help text are the
+/// exceptions the rule anticipates.
+const PRODUCTION_CLIPPY_EXPECTATIONS: &[(&str, &str)] = &[
+    // `fukulow help` prints its usage to standard output.
+    ("crates/app/src/main.rs", "print_stdout"),
+];
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -513,5 +516,145 @@ fn route_registrations_are_found_in_every_calling_form() -> Result<(), Box<dyn E
         calls.0.is_empty(),
         "a test module's router is not production"
     );
+    Ok(())
+}
+
+/// Where production code reads the migrator's URL, embeds migrations, or calls
+/// `db::migrate`, as `(file, form)`.
+#[derive(Default)]
+struct MigratorUses {
+    file: String,
+    found: Vec<(String, &'static str)>,
+}
+
+impl<'ast> Visit<'ast> for MigratorUses {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(function) = &*call.func
+            && function
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "var" || s.ident == "var_os")
+            && call.args.iter().any(|argument| {
+                matches!(argument, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. })
+                    if name.value().contains("MIGRATOR"))
+            })
+        {
+            self.found.push((self.file.clone(), "env"));
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if mac
+            .path
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "migrate")
+        {
+            self.found.push((self.file.clone(), "migrate!"));
+        }
+        visit::visit_macro(self, mac);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let names: Vec<_> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        if names.windows(2).any(|pair| pair == ["db", "migrate"]) {
+            self.found.push((self.file.clone(), "db::migrate"));
+        }
+        visit::visit_path(self, path);
+    }
+
+    // `use db::migrate` and `use db::{migrate as m}` are use trees, not paths.
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        fn imports_migrate(tree: &syn::UseTree, under_db: bool) -> bool {
+            match tree {
+                syn::UseTree::Path(path) => imports_migrate(&path.tree, path.ident == "db"),
+                syn::UseTree::Group(group) => group
+                    .items
+                    .iter()
+                    .any(|tree| imports_migrate(tree, under_db)),
+                syn::UseTree::Name(name) => under_db && name.ident == "migrate",
+                syn::UseTree::Rename(rename) => under_db && rename.ident == "migrate",
+                syn::UseTree::Glob(_) => under_db,
+            }
+        }
+        if imports_migrate(&item.tree, false) {
+            self.found.push((self.file.clone(), "db::migrate"));
+        }
+        visit::visit_item_use(self, item);
+    }
+}
+
+fn migrator_uses(file: &str, source: &str) -> Result<Vec<(String, &'static str)>, syn::Error> {
+    let mut uses = MigratorUses {
+        file: file.to_owned(),
+        ..MigratorUses::default()
+    };
+    uses.visit_file(&syn::parse_file(source)?);
+    Ok(uses.found)
+}
+
+/// The server never runs migrations and never holds the migrator's credentials:
+/// only `fukulow migrate` reads `MIGRATOR_DATABASE_URL` and calls `db::migrate`,
+/// and only `db`'s migrations module embeds them.
+#[test]
+fn only_the_migrate_command_touches_the_migrator() -> Result<(), Box<dyn Error>> {
+    let mut found = Vec::new();
+    for file in ModuleTree::of_workspace()?.production {
+        let relative = file
+            .strip_prefix(workspace())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        found.extend(migrator_uses(&relative, &fs::read_to_string(file)?)?);
+    }
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            ("crates/app/src/migrate.rs".to_owned(), "db::migrate"),
+            ("crates/app/src/migrate.rs".to_owned(), "env"),
+            ("crates/db/src/migrations.rs".to_owned(), "migrate!"),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
+    for (source, form) in [
+        (
+            r#"fn f() { let _ = std::env::var("MIGRATOR_DATABASE_URL"); }"#,
+            "env",
+        ),
+        (
+            r#"fn f() { let _ = env::var_os("MIGRATOR_DATABASE_URL"); }"#,
+            "env",
+        ),
+        (r#"fn f() { let _ = var("MIGRATOR_DATABASE_URL"); }"#, "env"),
+        (
+            r#"fn f() { let _ = sqlx::migrate!("../../migrations"); }"#,
+            "migrate!",
+        ),
+        (
+            "async fn f() { let _ = db::migrate(url).await; }",
+            "db::migrate",
+        ),
+        ("use db::migrate;", "db::migrate"),
+        ("use db::{connect, migrate as run};", "db::migrate"),
+        ("use db::*;", "db::migrate"),
+    ] {
+        assert_eq!(
+            migrator_uses("fixture.rs", source)?,
+            [("fixture.rs".to_owned(), form)],
+            "{source}"
+        );
+    }
+    for source in [
+        r#"fn f() { let _ = std::env::var("DATABASE_URL"); }"#,
+        r#"const USAGE: &str = "never MIGRATOR_DATABASE_URL";"#,
+    ] {
+        assert!(migrator_uses("fixture.rs", source)?.is_empty(), "{source}");
+    }
     Ok(())
 }

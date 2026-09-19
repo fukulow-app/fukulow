@@ -1,28 +1,78 @@
-# Local PostgreSQL for development and tests.
+# Self-hosting: docker compose up
 #
-# This is never a deployment target. Development and tests must stay on this
-# server: the test harness creates and drops databases, and pointing it at a
-# managed service would put real data in its path.
+# Required in the environment or in .env, with no defaults:
+#   FUKULOW_POSTGRES_PASSWORD  PostgreSQL administrator; reaches only `postgres`
+#   FUKULOW_MIGRATOR_PASSWORD  the migration role; reaches `postgres` and `migrate`
+#   FUKULOW_APP_PASSWORD       the server's role; reaches `postgres` and `app`
+#   FUKULOW_PUBLIC_ORIGIN      the browser origin, such as https://chat.example.com
+# Optional: FUKULOW_HTTP_PORT, the loopback host port for `app` (default 8080).
+#
+# For development and tests, use compose.dev.yaml instead.
+name: fukulow
+
 services:
   postgres:
-    image: postgres:17
-    container_name: fukulow-postgres
+    image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
     environment:
-      POSTGRES_USER: fukulow
-      POSTGRES_PASSWORD: fukulow
-      POSTGRES_DB: fukulow_dev
-    ports:
-      # Bound to loopback on purpose. A bare "15432:5432" publishes on every
-      # interface and bypasses the host firewall.
-      - "127.0.0.1:15432:5432"
+      POSTGRES_PASSWORD: ${FUKULOW_POSTGRES_PASSWORD:?FUKULOW_POSTGRES_PASSWORD is required}
+      POSTGRES_DB: fukulow
+      FUKULOW_MIGRATOR_PASSWORD: ${FUKULOW_MIGRATOR_PASSWORD:?FUKULOW_MIGRATOR_PASSWORD is required}
+      FUKULOW_APP_PASSWORD: ${FUKULOW_APP_PASSWORD:?FUKULOW_APP_PASSWORD is required}
+    # No published port: only migrate and app reach it, over the compose network.
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./docker/init:/docker-entrypoint-initdb.d:ro
+      - ./docker/compose-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fukulow -d fukulow_dev"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fukulow"]
       interval: 2s
       timeout: 3s
       retries: 30
+    restart: unless-stopped
+
+  # One-shot: applies migrations as the migrator and exits. The server starts only
+  # after it succeeds, and never holds the migrator's credentials.
+  migrate:
+    build: .
+    image: fukulow:local
+    command: ["fukulow", "migrate"]
+    environment:
+      # The password is not in the URL, so it needs no URL encoding: sqlx reads
+      # PGPASSWORD when the URL has none.
+      MIGRATOR_DATABASE_URL: postgres://fukulow_migrator@postgres:5432/fukulow
+      PGPASSWORD: ${FUKULOW_MIGRATOR_PASSWORD:?FUKULOW_MIGRATOR_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build: .
+    image: fukulow:local
+    environment:
+      DATABASE_URL: postgres://fukulow_app@postgres:5432/fukulow
+      PGPASSWORD: ${FUKULOW_APP_PASSWORD:?FUKULOW_APP_PASSWORD is required}
+      FUKULOW_PUBLIC_ORIGIN: ${FUKULOW_PUBLIC_ORIGIN:?FUKULOW_PUBLIC_ORIGIN is required}
+      RUST_LOG: info
+    ports:
+      # Loopback only: exposing the server is a deployment decision.
+      - "127.0.0.1:${FUKULOW_HTTP_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # The runtime image has no HTTP client; bash's /dev/tcp is enough for /health.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080
+          && printf 'GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+          && head -n 1 <&3 | grep -q ' 200 '
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
 
 volumes:
   postgres-data:
