@@ -522,6 +522,15 @@ fn route_registrations_are_found_in_every_calling_form() -> Result<(), Box<dyn E
 /// The `std::env` functions that read a variable by name.
 const ENV_READERS: &[&str] = &["var", "var_os", "vars", "vars_os"];
 
+/// `Some(name)` when `path` names a `std::env` reader through its module, such as
+/// `env::var` or `std::env::var_os`. A bare `var` can only come from an import, which
+/// is refused, so the module segment is enough.
+fn env_reader(path: &syn::Path) -> Option<String> {
+    let mut names = path.segments.iter().rev().map(|s| s.ident.to_string());
+    let name = names.next()?;
+    (names.next().as_deref() == Some("env") && ENV_READERS.contains(&name.as_str())).then_some(name)
+}
+
 /// Where production code reads the migrator's URL, embeds migrations, or calls
 /// `db::migrate`, as `(file, form)`.
 #[derive(Default)]
@@ -531,21 +540,48 @@ struct MigratorUses {
 }
 
 impl<'ast> Visit<'ast> for MigratorUses {
+    // `env::var("NAME")` and `env::var_os("NAME")` are the only accepted readers: called
+    // directly, with the name as a string literal, so the rule reads which variable it
+    // is. Any other reference to a reader is refused in `visit_expr_path`.
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(function) = &*call.func
-            && function
-                .path
-                .segments
-                .last()
-                .is_some_and(|s| s.ident == "var" || s.ident == "var_os")
-            && call.args.iter().any(|argument| {
-                matches!(argument, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. })
-                    if name.value().contains("MIGRATOR"))
-            })
-        {
-            self.found.push((self.file.clone(), "env"));
+        let direct = match &*call.func {
+            syn::Expr::Path(function) if function.qself.is_none() => {
+                env_reader(&function.path).filter(|name| name == "var" || name == "var_os")
+            }
+            _ => None,
+        };
+        if direct.is_none() {
+            visit::visit_expr_call(self, call);
+            return;
         }
-        visit::visit_expr_call(self, call);
+        match call.args.iter().collect::<Vec<_>>().as_slice() {
+            [
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(name),
+                    ..
+                }),
+            ] => {
+                if name.value().contains("MIGRATOR") {
+                    self.found.push((self.file.clone(), "env"));
+                }
+            }
+            // A computed name could be assembled into the migrator's variable.
+            _ => self.found.push((self.file.clone(), "env name not literal")),
+        }
+        for argument in &call.args {
+            self.visit_expr(argument);
+        }
+    }
+
+    // Reached only by a reader that is not called directly: `let read = env::var;`,
+    // `.map(env::var_os)`, or `env::vars()`, which reads every variable at once.
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        match env_reader(&path.path).as_deref() {
+            Some("vars" | "vars_os") => self.found.push((self.file.clone(), "env vars")),
+            Some(_) => self.found.push((self.file.clone(), "env reader value")),
+            None => {}
+        }
+        visit::visit_expr_path(self, path);
     }
 
     fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
@@ -611,26 +647,31 @@ impl<'ast> Visit<'ast> for MigratorUses {
         if aliases_db(&item.tree, false) {
             self.found.push((self.file.clone(), "db alias"));
         }
-        // The environment check reads calls by their last segment, `var` or `var_os`.
-        // `use std::env::var as read_env;` would hide one, so renaming an environment
-        // reader is refused in production outright rather than followed.
-        fn aliases_env_reader(tree: &syn::UseTree, under_env: bool) -> bool {
+        // Readers are recognised as `env::var` and `env::var_os`. Importing a reader
+        // (`use std::env::var;`, a glob) would leave a bare `var`, and renaming one or the
+        // module (`use std::env as e;`) would hide it, so both are refused in production.
+        fn env_import(tree: &syn::UseTree, under_env: bool) -> Option<&'static str> {
             match tree {
                 syn::UseTree::Path(path) => {
-                    aliases_env_reader(&path.tree, under_env || path.ident == "env")
+                    env_import(&path.tree, under_env || path.ident == "env")
                 }
                 syn::UseTree::Group(group) => group
                     .items
                     .iter()
-                    .any(|tree| aliases_env_reader(tree, under_env)),
-                syn::UseTree::Rename(rename) => {
-                    under_env && ENV_READERS.iter().any(|name| rename.ident == name)
-                }
-                syn::UseTree::Name(_) | syn::UseTree::Glob(_) => false,
+                    .find_map(|tree| env_import(tree, under_env)),
+                syn::UseTree::Rename(rename) => (rename.ident == "env"
+                    || (under_env
+                        && (rename.ident == "self"
+                            || ENV_READERS.iter().any(|name| rename.ident == name))))
+                .then_some("env alias"),
+                syn::UseTree::Name(name) => (under_env
+                    && ENV_READERS.iter().any(|reader| name.ident == reader))
+                .then_some("env import"),
+                syn::UseTree::Glob(_) => under_env.then_some("env import"),
             }
         }
-        if aliases_env_reader(&item.tree, false) {
-            self.found.push((self.file.clone(), "env alias"));
+        if let Some(form) = env_import(&item.tree, false) {
+            self.found.push((self.file.clone(), form));
         }
         visit::visit_item_use(self, item);
     }
@@ -689,7 +730,11 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
             r#"fn f() { let _ = env::var_os("MIGRATOR_DATABASE_URL"); }"#,
             "env",
         ),
-        (r#"fn f() { let _ = var("MIGRATOR_DATABASE_URL"); }"#, "env"),
+        // A bare `var` is caught at its import, the only way it can name the reader.
+        (
+            r#"use std::env::var; fn f() { let _ = var("MIGRATOR_DATABASE_URL"); }"#,
+            "env import",
+        ),
         (
             r#"fn f() { let _ = sqlx::migrate!("../../migrations"); }"#,
             "migrate!",
@@ -707,14 +752,34 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
         ("use db::{self as database};", "db alias"),
         ("use {db as database};", "db alias"),
         ("extern crate db as database;", "db alias"),
-        // An alias of an environment reader is refused, since its calls would not read
-        // `var` or `var_os`.
+        // Renaming a reader or the module would hide a call from the rule.
         ("use std::env::var as read_env;", "env alias"),
         ("use std::env::var_os as read_env;", "env alias"),
-        ("use std::env::{var as read_env, var_os};", "env alias"),
         ("use std::{env::{var_os as read_env}};", "env alias"),
         ("use env::var as read_env;", "env alias"),
         ("use ::std::env::vars as all_env;", "env alias"),
+        ("use std::env as environment;", "env alias"),
+        ("use std::{env as environment};", "env alias"),
+        ("use std::env::{self as environment};", "env alias"),
+        // Importing a reader would leave a bare `var` the rule cannot tell from others.
+        ("use std::env::var;", "env import"),
+        ("use std::env::{self, var_os};", "env import"),
+        ("use std::env::*;", "env import"),
+        // A reader taken as a function value, or given a computed name.
+        ("fn f() { let read = std::env::var; }", "env reader value"),
+        ("fn f() { let read = env::var_os; }", "env reader value"),
+        (
+            "fn f() { let _ = names.iter().map(env::var); }",
+            "env reader value",
+        ),
+        ("fn f() { let _ = env::var(name); }", "env name not literal"),
+        (
+            r#"fn f() { let _ = env::var_os(format!("{}_URL", prefix)); }"#,
+            "env name not literal",
+        ),
+        // Reading every variable at once includes the migrator's.
+        ("fn f() { let _ = std::env::vars(); }", "env vars"),
+        ("fn f() { for _ in env::vars_os() {} }", "env vars"),
     ] {
         assert_eq!(
             migrator_uses("fixture.rs", source)?,
@@ -727,10 +792,13 @@ fn migrator_uses_are_found_in_every_form() -> Result<(), Box<dyn Error>> {
         r#"const USAGE: &str = "never MIGRATOR_DATABASE_URL";"#,
         "use db::connect as open;",
         "use other::db as unrelated;",
-        "use std::env::var;",
-        "use std::env::{self, var_os};",
+        "use std::env;",
+        "use std::env::{self, VarError};",
         "use std::env::args_os as arguments;",
         "use other::var as unrelated;",
+        r#"fn f() { let _ = env::var("DATABASE_URL"); let _ = std::env::var_os("RUST_LOG"); }"#,
+        "fn f() { let _ = std::env::args_os(); let _ = other::var(name); }",
+        "fn f() { let read = settings::var; }",
     ] {
         assert!(migrator_uses("fixture.rs", source)?.is_empty(), "{source}");
     }
